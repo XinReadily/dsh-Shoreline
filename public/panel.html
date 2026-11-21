@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小汐的 B 站游客面板</title>
+<style>
+  /* 面板颜色分两层：真正跟 DSH 主题走的只有背景、文字、边框、强调色（由外层注入）；
+     卡片/隔层这类就用中性透明度叠加，这样任何皮肤下都不会出现深浅打架。 */
+  :root { --bg:#0d1117; --panel:rgba(127,127,127,.07); --deep:rgba(127,127,127,.04); --line:#30363d; --line2:rgba(127,127,127,.12); --line-strong:rgba(127,127,127,.28); --text:#e6edf3; --text-soft:#c9d1d9; --muted:#8b949e; --accent:#58a6ff; --accent-btn:#1f6feb; --on-accent:#fff; --ok:#3fb950; --bad:#f85149; --scroll-hover:rgba(127,127,127,.42); }
+  html[data-theme="light"] { --bg:#f6f8fa; --panel:rgba(127,127,127,.06); --deep:rgba(127,127,127,.035); --line:#d0d7de; --line2:rgba(127,127,127,.12); --line-strong:rgba(127,127,127,.26); --text:#1f2328; --text-soft:#424a53; --muted:#656d76; --accent:#0969da; --accent-btn:#0969da; --on-accent:#fff; --ok:#1a7f37; --bad:#cf222e; --scroll-hover:rgba(127,127,127,.42); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.55 "Microsoft YaHei", system-ui, sans-serif; }
+  header { padding:22px 28px 14px; border-bottom:1px solid var(--line); display:flex; gap:18px; align-items:baseline; flex-wrap:wrap; }
+  h1 { margin:0; font-size:20px; letter-spacing:.5px; }
+  header .sub { color:var(--muted); font-size:12px; }
+  main { max-width:1180px; margin:0 auto; padding:20px 24px 48px; display:grid; gap:16px; }
+  .grid { display:grid; grid-template-columns:1.15fr .85fr; gap:16px; }
+  @media (max-width:900px){ .grid { grid-template-columns:1fr; } }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  .card h2 { margin:0 0 12px; font-size:15px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:9px 0; border-bottom:1px dashed var(--line2); }
+  .row:last-child { border-bottom:0; }
+  .row label { color:var(--text-soft); }
+  .hint { color:var(--muted); font-size:12px; margin-top:2px; }
+  .switch { position:relative; width:42px; height:24px; flex:none; cursor:pointer; }
+  .switch input { opacity:0; width:0; height:0; }
+  .slider { position:absolute; inset:0; background:var(--line); border-radius:24px; cursor:pointer; transition:.2s; }
+  .slider:before { content:""; position:absolute; width:18px; height:18px; left:3px; top:3px; background:var(--on-accent); border-radius:50%; transition:.2s; }
+  .switch input:checked + .slider { background:var(--accent); }
+  .switch input:checked + .slider:before { transform:translateX(18px); }
+  .stat { display:flex; gap:18px; color:var(--muted); font-size:12px; flex-wrap:wrap; margin-bottom:10px; }
+  .stat b { color:var(--text); font-size:16px; display:block; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:7px 6px; border-bottom:1px solid var(--line2); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
+  .history { display:grid; gap:8px; max-height:520px; overflow-y:auto; padding-right:6px; }
+  .logs { max-height:420px; overflow-y:auto; border:1px solid var(--line2); border-radius:9px; }
+  .logs thead th { position:sticky; top:0; z-index:1; background:var(--panel); }
+  * { scrollbar-width:thin; scrollbar-color:var(--line-strong) transparent; }
+  ::-webkit-scrollbar { width:10px; height:10px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:var(--line); border:2px solid transparent; background-clip:padding-box; border-radius:8px; }
+  ::-webkit-scrollbar-thumb:hover { background:var(--scroll-hover); }
+  .day { border:1px solid var(--line2); border-radius:9px; background:var(--deep); overflow:hidden; }
+  .day > summary { list-style:none; cursor:pointer; padding:10px 12px; display:flex; align-items:center; gap:10px; }
+  .day > summary::-webkit-details-marker { display:none; }
+  .day > summary .day-title { font-weight:600; }
+  .day > summary .day-count { color:var(--muted); font-size:12px; }
+  .day > summary .chev { margin-left:auto; color:var(--muted); font-family:monospace; }
+  .day > summary .chev::before { content:"v"; }
+  .day[open] > summary .chev::before { content:"^"; }
+  .day-list { display:grid; gap:8px; padding:0 8px 8px; }
+  .item { display:grid; grid-template-columns:120px 1fr; gap:12px; border:1px solid var(--line2); border-radius:10px; padding:8px; background:var(--panel); }
+  .item img { width:120px; height:68px; object-fit:cover; border-radius:6px; background:var(--line2); }
+  .item .t { font-weight:600; line-height:1.35; }
+  .item .m { color:var(--muted); font-size:12px; margin-top:3px; }
+  .btns { display:flex; gap:8px; margin-top:7px; flex-wrap:wrap; }
+  button { background:var(--line2); color:var(--text); border:1px solid var(--line); border-radius:7px; padding:5px 10px; cursor:pointer; font-size:12px; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent-btn); border-color:var(--accent-btn); }
+  button:disabled { opacity:.45; cursor:wait; }
+  .frames { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  .frames img { width:150px; height:84px; object-fit:cover; border-radius:6px; border:1px solid var(--line); }
+  .msg { position:fixed; right:20px; bottom:20px; background:var(--accent-btn); color:var(--on-accent); padding:10px 14px; border-radius:8px; display:none; max-width:420px; z-index:9; }
+  .empty { color:var(--muted); font-size:13px; padding:16px 4px; }
+  #workspaces { max-height:480px; overflow-y:auto; padding-right:4px; }
+  .ws { border:1px solid var(--line2); border-radius:9px; margin-bottom:9px; padding:10px 12px; background:var(--deep); }
+  .ws-head { display:flex; align-items:center; gap:10px; cursor:pointer; }
+  .ws-head b { font-size:13px; }
+  .ws-path { color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ws-sessions { margin:8px 0 0 26px; display:grid; gap:5px; }
+  .sess { display:flex; align-items:center; gap:8px; color:var(--text-soft); font-size:12px; }
+  .sess code { color:var(--muted); font-size:11px; }
+  .tiers { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
+  @media (max-width:760px){ .tiers { grid-template-columns:1fr 1fr; } }
+  .tier { border:1px solid var(--line2); border-radius:9px; padding:9px 10px; }
+  .tier label { display:block; font-size:12px; color:var(--text-soft); }
+  .tier .range { color:var(--muted); font-size:11px; margin-top:2px; }
+  .tier input { width:100%; margin-top:6px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px 7px; }
+  /* 嵌进 Shoreline 面板时收紧留白：外面已经有页签和标题，这里只保留内容。 */
+  html.embed header { padding:14px 18px 12px; }
+  html.embed header h1 { font-size:16px; }
+  html.embed header .sub { display:none; }
+  html.embed main { max-width:none; padding:12px 16px 22px; gap:12px; }
+  html.embed .card { padding:13px 15px; border-radius:10px; }
+</style>
+<script>
+  // 嵌进 Shoreline 的「B站」页签时带 ?embed=1，收掉多余的留白。
+  if (new URLSearchParams(location.search).get('embed') === '1') {
+    document.documentElement.classList.add('embed');
+  }
+  // 外层面板会把当前主题的实际颜色 token 发过来（皮肤插件改过的也算），
+  // 直接覆盖成 CSS 变量，这样这块就跟外面是一套配色，而不是固定的黑白两套。
+  window.addEventListener('message', function (event) {
+    var data = event.data;
+    if (!data || data.type !== 'shoreline-theme') return;
+    var root = document.documentElement;
+    root.dataset.theme = data.dark ? 'dark' : 'light';
+    if (data.tokens && typeof data.tokens === 'object') {
+      for (var key in data.tokens) {
+        if (!Object.prototype.hasOwnProperty.call(data.tokens, key)) continue;
+        var value = data.tokens[key];
+        if (typeof value === 'string' && value) root.style.setProperty('--' + key, value);
+      }
+    }
+  });
+  // 告诉外层「我准备好了」，这样它能在加载完成后再把主题发一次。
+  try { parent.postMessage({ type: 'shoreline-ready' }, '*'); } catch (e) {}
+</script>
+</head>
+<body>
+<header>
+  <h1>小汐的 B 站游客面板</h1>
+  <span class="sub">游客态 · 不登录 · 只读浏览 + 本地记录</span>
+  <span class="sub" id="clock"></span>
+</header>
+<main>
+  <div class="grid">
+    <section class="card">
+      <h2>开关</h2>
+      <div class="row"><div><label>启用 B 站游客态</label><div class="hint">关闭后 QQ 里所有 bili_* 工具都会拒绝（历史仍可查看）</div></div>
+        <label class="switch"><input type="checkbox" id="enabled"><span class="slider"></span></label></div>
+      <div class="row"><div><label>记录刷过的视频</label><div class="hint">每次看详情/抽帧/分享时写入本地历史</div></div>
+        <label class="switch"><input type="checkbox" id="recordHistory"><span class="slider"></span></label></div>
+      <div class="row"><div><label>允许抽帧</label><div class="hint">下载 360P 视频并用 ffmpeg 按分档抽帧，耗时较长</div></div>
+        <label class="switch"><input type="checkbox" id="allowFrames"><span class="slider"></span></label></div>
+      <div class="row"><div><label>允许分享到 QQ</label><div class="hint">封面会先下载到本地再发，避免群聊拉远程封面失败</div></div>
+        <label class="switch"><input type="checkbox" id="allowShare"><span class="slider"></span></label></div>
+      <div class="row"><div><label>分享默认目标</label><div class="hint">私聊发给主人；群聊使用下面的群号</div></div>
+        <select id="shareTarget" style="background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px">
+          <option value="private">主人私聊</option><option value="group">群聊</option>
+        </select></div>
+      <div class="row"><div><label>分享群号</label><div class="hint">target=group 时使用，可在 QQ 群设置里查</div></div>
+        <input id="shareGroupId" placeholder="123456789" style="width:160px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px"></div>
+    </section>
+    <section class="card">
+      <h2>状态</h2>
+      <div class="stat">
+        <div><b id="stHistory">0</b>刷过视频</div>
+        <div><b id="stCalls">0</b>最近调用</div>
+        <div><b id="stErr">0</b>最近错误</div>
+      </div>
+      <div class="hint">面板只监听 127.0.0.1:8788。历史与日志在 C:\Users\<user>\.dsh\bili-feed。</div>
+      <div class="btns" style="margin-top:12px">
+        <button id="refresh">刷新</button>
+        <button id="clear">清空历史</button>
+      </div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>抽帧帧数</h2>
+    <div class="hint" style="margin-bottom:10px">按视频实际时长分档；QQ 里调用 bili_frames 不传 count 时用这里的值。单次最多 40 帧。</div>
+    <div class="tiers">
+      <div class="tier"><label>极短</label><div class="range">t ≤ 30 秒</div><input id="frameMicro" type="number" min="1" max="40"></div>
+      <div class="tier"><label>短</label><div class="range">30 秒 &lt; t ≤ 3 分</div><input id="frameShort" type="number" min="1" max="40"></div>
+      <div class="tier"><label>中</label><div class="range">3 分 &lt; t ≤ 6 分</div><input id="frameMedium" type="number" min="1" max="40"></div>
+      <div class="tier"><label>长</label><div class="range">6 分 &lt; t ≤ 12 分</div><input id="frameLong" type="number" min="1" max="40"></div>
+      <div class="tier"><label>超长</label><div class="range">t &gt; 12 分</div><input id="frameXlong" type="number" min="1" max="40"></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>工作区与会话</h2>
+    <div class="hint" style="margin-bottom:10px">勾选工作区会放开该工作区下所有会话；也可只勾单个会话。未勾选的会话调用 bili_* 会被拒绝。这里只控制 B 站游客工具，不影响 SurfCore 的 B 站功能。</div>
+    <div id="workspaces"></div>
+  </section>
+
+  <section class="card">
+    <h2>刷过的视频</h2>
+    <div class="history" id="history"></div>
+  </section>
+
+  <section class="card">
+    <h2>最近调用</h2>
+    <div class="logs">
+      <table>
+        <thead><tr><th>时间</th><th>工具</th><th>耗时</th><th>结果</th><th>参数 / 错误</th></tr></thead>
+        <tbody id="logs"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<div class="msg" id="msg"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let state = null;
+
+function toast(text){ const m=$('msg'); m.textContent=text; m.style.display='block'; clearTimeout(m._t); m._t=setTimeout(()=>m.style.display='none',3200); }
+
+async function api(path, body){
+  const r = await fetch(path, body ? {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)} : {});
+  const d = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.error || ('HTTP '+r.status));
+  return d;
+}
+
+function fmtTime(iso){ try{ return new Date(iso).toLocaleString('zh-CN',{hour12:false}); }catch{ return iso; } }
+function dayKey(iso){ try{ return new Date(iso).toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit'}); }catch{ return String(iso).slice(0,10); } }
+
+function renderWorkspaces(c){
+  const enabledWs = new Set(c.enabledWorkspaces || []);
+  const enabledSess = new Set(c.enabledSessions || []);
+  const workspaces = state.workspaces || [];
+  if (!workspaces.length) {
+    const sessions = state.sessions || [];
+    $('workspaces').innerHTML = sessions.length ? sessions.map(s=>`
+      <label class="sess" style="padding:6px 0">
+        <input type="checkbox" data-session="${esc(s.sessionId)}" ${enabledSess.has(s.sessionId)||enabledSess.has(s.key)?'checked':''}>
+        <b>${esc(s.key)}</b><code>${esc(s.sessionId)}</code>
+      </label>`).join('') : '<div class="empty">没有读到 DSH 工作区数据。</div>';
+    return;
+  }
+  $('workspaces').innerHTML = workspaces.map(w=>{
+    const wsChecked = enabledWs.has(w.id);
+    const rows = w.sessions.length ? w.sessions.map(s=>`
+      <label class="sess">
+        <input type="checkbox" data-session="${esc(s.id)}" ${enabledSess.has(s.id)||(s.key&&enabledSess.has(s.key))?'checked':''}>
+        <b>${esc(s.label)}</b><code>${esc(s.id)}</code>
+      </label>`).join('') : '<div class="hint">（这个工作区没有会话）</div>';
+    return `<div class="ws">
+      <label class="ws-head">
+        <input type="checkbox" data-workspace="${esc(w.id)}" ${wsChecked?'checked':''}>
+        <b>${esc(w.title)}</b><span class="ws-path">${esc(w.path)}</span>
+      </label>
+      <div class="ws-sessions">${rows}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderHistory(){
+  const h = state.history || [];
+  if (!h.length) { $('history').innerHTML = '<div class="empty">还没有记录。让小汐在 QQ 里刷两个视频，或在这里用 /api/frames 测试。</div>'; return; }
+  const groups = new Map();
+  for (const v of h) { const k = dayKey(v.lastSeenAt); if(!groups.has(k)) groups.set(k, []); groups.get(k).push(v); }
+  $('history').innerHTML = [...groups.entries()].map(([day, items])=>`
+    <details class="day">
+      <summary><span class="day-title">${esc(day)}</span><span class="day-count">${items.length} 条</span><span class="chev"></span></summary>
+      <div class="day-list">${items.map(v=>`
+        <div class="item" data-bvid="${esc(v.bvid)}">
+          <img src="${esc(v.cover)}" referrerpolicy="no-referrer" loading="lazy" alt="">
+          <div>
+            <div class="t">${esc(v.title)}</div>
+            <div class="m">${esc(v.author||'?')} · ${esc(fmtTime(v.lastSeenAt))} · 看过 ${v.seenCount||1} 次 · ${esc(v.bvid)}</div>
+            <div class="btns">
+              <button class="primary" data-act="share">分享到 QQ</button>
+              <button data-act="frames">抽帧</button>
+              <a href="${esc(v.url)}" target="_blank" rel="noreferrer"><button>打开 B 站</button></a>
+            </div>
+            <div class="frames"></div>
+          </div>
+        </div>`).join('')}</div>
+    </details>`).join('');
+}
+
+function render(){
+  const c = state.config || {};
+  for(const k of ['enabled','recordHistory','allowFrames','allowShare']) $(k).checked = !!c[k];
+  for(const k of ['frameMicro','frameShort','frameMedium','frameLong','frameXlong']) $(k).value = c[k] ?? 20;
+  $('shareTarget').value = c.shareTarget === 'group' ? 'group' : 'private';
+  $('shareGroupId').value = c.shareGroupId || '';
+  renderWorkspaces(c);
+  $('stHistory').textContent = (state.history||[]).length;
+  $('stCalls').textContent = (state.logs||[]).length;
+  $('stErr').textContent = (state.logs||[]).filter(x=>x && x.ok===false).length;
+  renderHistory();
+
+  const logs = state.logs || [];
+  $('logs').innerHTML = logs.length ? logs.map(x=>{
+    const args = x.args ? Object.entries(x.args).filter(([,v])=>v!==undefined && v!==null && v!=='').map(([k,v])=>`${k}=${v}`).join(' ') : '';
+    const result = x.ok === false ? `<span class="bad">失败${x.code!==undefined?' '+x.code:''}</span>` : '<span class="ok">成功</span>';
+    return `<tr><td>${esc(fmtTime(x.ts))}</td><td>${esc(x.tool)}</td><td>${x.ms??''} ms</td><td>${result}</td><td>${esc(args || x.error || '')}</td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="empty">暂无调用</td></tr>';
+}
+
+async function load(){ try{ state = await api('/api/state'); render(); }catch(e){ toast('读取失败：'+e.message); } }
+async function save(patch){ try{ state.config = (await api('/api/config', patch)).config; render(); toast('已保存'); }catch(e){ toast('保存失败：'+e.message); } }
+
+for(const k of ['enabled','recordHistory','allowFrames','allowShare']){
+  $(k).addEventListener('change', ()=> save({[k]: $(k).checked}));
+}
+for(const k of ['frameMicro','frameShort','frameMedium','frameLong','frameXlong']){
+  $(k).addEventListener('change', ()=> save({[k]: Number($(k).value)}));
+}
+$('shareTarget').addEventListener('change', ()=> save({shareTarget: $('shareTarget').value}));
+$('shareGroupId').addEventListener('change', ()=> save({shareGroupId: $('shareGroupId').value.trim()}));
+$('workspaces').addEventListener('change', ()=>{
+  const ws = [...document.querySelectorAll('#workspaces input[data-workspace]:checked')].map(x=>x.dataset.workspace);
+  const ses = [...document.querySelectorAll('#workspaces input[data-session]:checked')].map(x=>x.dataset.session);
+  save({enabledWorkspaces: ws, enabledSessions: ses});
+});
+$('refresh').onclick = load;
+$('clear').onclick = async ()=>{ if(!confirm('清空「刷过的视频」历史？')) return; try{ await api('/api/history/clear',{}); await load(); toast('已清空'); }catch(e){ toast(e.message); } };
+
+$('history').addEventListener('click', async (ev)=>{
+  const btn = ev.target.closest('button[data-act]'); if(!btn) return;
+  const item = btn.closest('.item'); const bvid = item?.dataset.bvid; if(!bvid) return;
+  const act = btn.dataset.act;
+  if(act==='share'){
+    btn.disabled=true; btn.textContent='发送中…';
+    try{ const r=await api('/api/share',{bvid, target:$('shareTarget').value, groupId:$('shareGroupId').value.trim()}); toast('已分享：'+r.title); }catch(e){ toast('分享失败：'+e.message); }
+    btn.disabled=false; btn.textContent='分享到 QQ';
+  }
+  if(act==='frames'){
+    const box = item.querySelector('.frames'); btn.disabled=true; btn.textContent='抽帧中…';
+    try{
+      const r=await api('/api/frames',{bvid});
+      box.innerHTML = (r.files||[]).map(f=>`<a href="${esc(f.url)}" target="_blank"><img src="${esc(f.url)}" title="${esc(f.time)}"></a>`).join('');
+      toast(`抽了 ${(r.files||[]).length} 帧（${Math.round(r.actualDuration||0)} 秒）`);
+    }catch(e){ toast('抽帧失败：'+e.message); }
+    btn.disabled=false; btn.textContent='抽帧';
+  }
+});
+
+setInterval(()=>{ $('clock').textContent = new Date().toLocaleString('zh-CN',{hour12:false}); }, 1000);
+load();
+</script>
+</body>
+</html>

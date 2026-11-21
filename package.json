@@ -1,0 +1,50 @@
+{
+  "name": "shoreline",
+  "version": "0.8.3",
+  "private": true,
+  "description": "Shoreline —— DSH 的常驻能力层：按遗忘曲线运作的记忆、QQ 桥接、人格与角色、B 站游客态、QQ 聊天预设，统一在一个控制面板里。",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./qq-tool-restrict.mjs": "./qq-tool-restrict.mjs",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "client",
+    "scripts",
+    "lib",
+    "test",
+    "public",
+    "presets",
+    "seed",
+    "locale",
+    "cordis.patch.yml",
+    "qq-tool-restrict.mjs",
+    "icon.svg",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node test/run.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": [
+        "./cordis.patch.yml",
+        "./presets/qq-chat.patch.yml",
+        "./presets/qq-chat-v2.patch.yml"
+      ]
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "license": "MIT"
+}
+
