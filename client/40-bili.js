@@ -452,7 +452,7 @@
                       onChange: (e) => toggleSession(s, e.target.checked),
                     }),
                     label,
-                    s.sessionId ? h('code', null, String(s.sessionId).slice(0, 12)) : null,
+                    s.sessionId ? h('code', null, String(s.sessionId).replace(/^session-/, '').slice(0, 8)) : null,
                   );
                 }),
               )

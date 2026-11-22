@@ -193,7 +193,7 @@ const SAFE_EXACT = new Set([
 const BILI_CONFIG = process.env.BILI_FEED_CONFIG
   || path.join(os.homedir(), '.dsh', 'bili-feed', 'config.json')
 const QQ_SESSIONS = process.env.QQ_SESSIONS_FILE
-  || path.join(os.homedir(), '.dsh', 'qq-bridge-own', 'state', 'sessions.json')
+  || path.join(os.homedir(), 'qq-bridge-own', 'state', 'sessions.json')
 const QQ_SESSIONS_FALLBACKS = [
   path.join(os.homedir(), '.dsh', 'plugins', 'shoreline', 'bridge', 'state', 'sessions.json'),
   'D:/surfcore/state/sessions.json',
