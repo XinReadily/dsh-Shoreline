@@ -15,6 +15,8 @@
       const [gwKind, setGwKind] = useState('');
       const [upd, setUpd] = useState(null);
       const [updBusy, setUpdBusy] = useState(false);
+      const [nodeEnv, setNodeEnv] = useState(null);
+      const [nodeBusy, setNodeBusy] = useState(false);
 
       const loadStatus = async (announce) => {
         const fails = [];
@@ -26,12 +28,13 @@
             return { ok: false, data: null };
           }
         };
-        const [st, ss, sl, cs, gw] = await Promise.all([
+        const [st, ss, sl, cs, gw, nd] = await Promise.all([
           get('/bridge/status'),
           get('/bridge/sessions'),
           get('/bridge/snowluma'),
           get('/bridge/console'),
           get('/bridge/gateway'),
+          get('/bridge/node'),
         ]);
         if (st.ok) setStatus(st.data?.bridge ?? null);
         if (ss.ok) {
@@ -40,6 +43,7 @@
         }
         if (sl.ok) setSnowluma(sl.data?.snowluma ?? null);
         if (cs.ok) setConsoleInfo(cs.data ?? null);
+        if (nd.ok && nd.data) setNodeEnv(nd.data);
         if (gw.ok && gw.data?.ok) {
           setGateway(gw.data);
           setGwHome((prev) => (prev == null ? (gw.data.home || '') : prev));
@@ -168,6 +172,22 @@
           setError(String(e?.message ?? e));
         } finally {
           setBusy(false);
+        }
+      };
+
+      const installNodeNow = async () => {
+        setNodeBusy(true);
+        setError('');
+        setOk('');
+        try {
+          const data = await api('/bridge/node/install', { method: 'POST', body: '{}' });
+          if (data.ok === false) throw new Error(data.error || '安装 Node 失败');
+          setOk(data.already ? `已经装好了：${data.version}（${data.exe}）` : `Node ${data.version} 已装到 ${data.home}`);
+          await loadStatus();
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        } finally {
+          setNodeBusy(false);
         }
       };
 
@@ -375,6 +395,39 @@
           ),
           h('div', { className: 'shl-note' }, 'OpenQQ 装好后先在它的 WebUI 里扫码登录 QQ，再在网络配置里打开 OneBot v11 的 WebSocket（默认 3001）；桥接会读它的 config/openqq.json 拿端口和 token。'),
           gateway?.hint ? h('div', { className: 'shl-note' }, gateway.hint) : null,
+        ),
+        h(
+          'div',
+          { className: 'shl-section' },
+          h('h4', { className: 'shl-h4' }, '运行环境'),
+          h(
+            'div',
+            { className: 'shl-kv' },
+            h('span', null, 'DSH 自带'),
+            h('b', null, nodeEnv?.dsh || '—'),
+            h('span', null, '系统 Node'),
+            h('b', null, nodeEnv?.system?.version || '没找到'),
+            h('span', null, '插件内置'),
+            h('b', null, nodeEnv?.installed?.version || '未安装'),
+            h('span', null, '状态'),
+            h('b', null, nodeEnv?.usable ? `可用（${nodeEnv.usable.version}）` : `需要 ${nodeEnv?.minMajor ?? 22}+`),
+          ),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h(
+              'button',
+              { className: 'shl-btn', disabled: nodeBusy || Boolean(nodeEnv?.usable), onClick: installNodeNow },
+              nodeEnv?.usable ? '已就绪' : '安装 Node',
+            ),
+          ),
+          h(
+            'div',
+            { className: 'shl-note' },
+            nodeEnv?.usable
+              ? 'OpenQQ、桥接子进程都能用这个 Node；DSH 自己跑在它自带的 Node 上，不受影响。'
+              : nodeEnv?.hint || '没找到 Node 22+。点「安装 Node」会从 nodejs.org 下载官方 Windows 版解压到插件目录（约 30MB），不用自己配环境。',
+          ),
         ),
         h(
           'div',

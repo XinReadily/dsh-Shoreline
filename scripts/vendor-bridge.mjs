@@ -9,9 +9,11 @@
  * - 复制运行所需文件：src/*.js、scripts/build-agent-preset-patches.mjs、dsh/（预设源）、
  *   plugins/qq-agent-presets/（preset patch 与守卫），以及 package.json、config.example.json、
  *   LICENSE、NOTICE.md、README.md。
- * - 不复制 config.json / state/ / 日志 / *.bak* / node_modules。
+ * - 同时把桥接运行必需的 npm 依赖（含传递依赖闭包）复制到 bridge/deps/，
+ *   让没装过旧版 qq-bridge-own 的机器也能直接启动。启动时 service.js 会把
+ *   bridge/deps 链成 bridge/node_modules（junction），所以 git 只跟踪 deps/。
+ * - 不复制 config.json / state/ / 日志 / *.bak* / 原 node_modules。
  * - --check 只比较差异，不写文件。
- * - 桥接依赖由 lib/bridge/service.js 的 ensureDeps() 在首次启动时复用旧安装（junction）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -29,6 +31,10 @@ const sourceDir = sourceIdx >= 0 && args[sourceIdx + 1]
   : path.join(process.env.USERPROFILE || process.env.HOME || '', 'qq-bridge-own');
 
 const SKIP_NAMES = new Set(['node_modules', 'state', 'config.json', '.git']);
+
+// 桥接直接依赖；ws 的可选原生依赖与 sdk 的 peer 依赖不装也能跑
+const BRIDGE_DEPS = ['ws', 'js-yaml', 'zod', '@modelcontextprotocol/sdk'];
+const SKIP_DEPS = new Set(['bufferutil', 'utf-8-validate', '@cfworker/json-schema']);
 
 function readDir(p) {
   return fs.existsSync(p) ? fs.readdirSync(p, { withFileTypes: true }) : [];
@@ -59,6 +65,57 @@ function copyFile(rel) {
   fs.mkdirSync(path.dirname(to), { recursive: true });
   fs.writeFileSync(to, buf);
   return { rel, bytes: buf.length };
+}
+
+// ── 依赖闭包 ────────────────────────────────────────────────────────────────
+// 从 sourceDir/node_modules 解析直接依赖的传递闭包。pnpm 的包目录是符号链接，
+// 用 realpath 取实体再复制。
+function depClosure() {
+  const seen = new Set();
+  const queue = [...BRIDGE_DEPS];
+  while (queue.length) {
+    const name = queue.shift();
+    if (seen.has(name) || SKIP_DEPS.has(name)) continue;
+    const dir = path.join(sourceDir, 'node_modules', name);
+    const pkgFile = path.join(dir, 'package.json');
+    if (!fs.existsSync(pkgFile)) continue;
+    seen.add(name);
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
+      for (const dep of Object.keys(pkg.dependencies || {})) queue.push(dep);
+    } catch {
+      /* 坏包跳过 */
+    }
+  }
+  return [...seen].sort();
+}
+
+function copyDepDir(name) {
+  const real = fs.realpathSync(path.join(sourceDir, 'node_modules', name));
+  const dest = path.join(targetDir, 'deps', name);
+  let files = 0;
+  let bytes = 0;
+  const visit = (dir, rel) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (ent.name === 'node_modules' || ent.name === '.git') continue;
+      const src = path.join(dir, ent.name);
+      const nextRel = path.join(rel, ent.name);
+      if (ent.isDirectory()) {
+        visit(src, nextRel);
+      } else {
+        const buf = fs.readFileSync(src);
+        files += 1;
+        bytes += buf.length;
+        if (!checkOnly) {
+          const to = path.join(dest, nextRel);
+          fs.mkdirSync(path.dirname(to), { recursive: true });
+          fs.writeFileSync(to, buf);
+        }
+      }
+    }
+  };
+  visit(real, '');
+  return { name, files, bytes };
 }
 
 if (!fs.existsSync(sourceDir)) {
@@ -93,16 +150,38 @@ for (const rel of ['package.json', 'config.example.json', 'LICENSE', 'NOTICE.md'
   results.push(copyFile(rel));
 }
 
+// 5) 桥接运行依赖（ws / js-yaml / zod / @modelcontextprotocol/sdk 及其传递依赖）
+//    放在 bridge/deps/，启动时由 service.js 链接成 bridge/node_modules。
+let depStats = { packages: 0, files: 0, bytes: 0 };
+let depMissing = [];
+for (const name of depClosure()) {
+  const destPkg = path.join(targetDir, 'deps', name, 'package.json');
+  if (checkOnly) {
+    if (!fs.existsSync(destPkg)) depMissing.push(name);
+    continue;
+  }
+  const stat = copyDepDir(name);
+  depStats.packages += 1;
+  depStats.files += stat.files;
+  depStats.bytes += stat.bytes;
+}
+
 if (checkOnly) {
   const diff = results.filter((r) => !r.same);
-  if (diff.length === 0) {
-    console.log(`bridge/ 与 ${sourceDir} 一致（${results.length} 个文件）`);
+  if (diff.length === 0 && depMissing.length === 0) {
+    console.log(`bridge/ 与 ${sourceDir} 一致（${results.length} 个文件 + 依赖闭包）`);
   } else {
-    console.log(`bridge/ 有 ${diff.length} 个文件不一致：`);
-    for (const d of diff) console.log(`  ${d.rel}`);
+    if (diff.length) {
+      console.log(`bridge/ 有 ${diff.length} 个文件不一致：`);
+      for (const d of diff) console.log(`  ${d.rel}`);
+    }
+    if (depMissing.length) {
+      console.log(`bridge/deps 缺 ${depMissing.length} 个包：${depMissing.join(', ')}`);
+    }
     process.exit(1);
   }
 } else {
   const total = results.reduce((n, r) => n + (r.bytes || 0), 0);
   console.log(`已复制 ${results.length} 个文件到 ${targetDir}（${(total / 1024).toFixed(1)} KB）`);
+  console.log(`依赖：${depStats.packages} 个包 / ${depStats.files} 个文件 / ${(depStats.bytes / 1048576).toFixed(1)} MB → bridge/deps/`);
 }

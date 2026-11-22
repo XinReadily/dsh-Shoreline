@@ -7,6 +7,8 @@
       const [error, setError] = useState('');
       const [ok, setOk] = useState('');
       const [busy, setBusy] = useState(false);
+      const [envBusy, setEnvBusy] = useState(false);
+      const [envMsg, setEnvMsg] = useState('');
 
       const load = useCallback(async () => {
         setError('');
@@ -65,6 +67,31 @@
           setBusy(false);
         }
       }, [draft]);
+
+      const installEnv = useCallback(async (force = false) => {
+        setEnvBusy(true);
+        setEnvMsg('');
+        setError('');
+        try {
+          const res = await fetch(`${API}/voice/edge-env`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ force }),
+          });
+          const data = await res.json();
+          if (!data?.ok) throw new Error(data?.error || data?.env?.error || '安装失败');
+          if (data.config) setCfg(data.config);
+          if (data.status) setSt(data.status);
+          if (data.config) setDraft(data.config);
+          const sizeMb = Math.round((data.env?.sizeBytes ?? 0) / 1024 / 1024);
+          setEnvMsg(`装好了：${data.env?.python || ''}（约 ${sizeMb} MB）。重启桥接后 Edge 就能用。`);
+        } catch (e) {
+          setEnvMsg('');
+          setError(e?.message || '安装失败');
+        } finally {
+          setEnvBusy(false);
+        }
+      }, []);
 
       if (!draft) {
         return h(
@@ -154,11 +181,55 @@
           ),
           Field({
             label: 'Edge 音色',
-            hint: 'Edge 不需要密钥，随时能出声。键里换成别的 voice_id 也可以，例如 zh-CN-XiaoxiaoNeural。',
+            hint: 'Edge 不需要密钥。换成别的 voice_id 也可以，例如 zh-CN-XiaoxiaoNeural。',
             children: h('input', {
               className: 'shl-input',
               value: edge.voice || '',
               onChange: (e) => patch('tts', 'edge', { ...edge, voice: e.target.value }),
+            }),
+          }),
+          h(
+            'div',
+            { className: 'shl-note' },
+            st?.edge?.env?.ready
+              ? `Edge 环境：已就绪（Python ${st.edge.env.python || ''}，约 ${Math.round((st.edge.env.sizeBytes || 0) / 1024 / 1024)} MB）`
+              : `Edge 环境：未安装。点下面按钮会下载 Windows 嵌入式 Python 3.11 + edge-tts（约 40 MB，落在 ~/.dsh/shoreline/python）。`,
+          ),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'shl-btn',
+                disabled: envBusy || busy,
+                onClick: () => installEnv(false),
+              },
+              envBusy ? '正在安装…' : (st?.edge?.env?.ready ? '重新安装 Edge 环境' : '一键安装 Edge 环境'),
+            ),
+          ),
+          envMsg ? h('div', { className: 'shl-ok' }, envMsg) : null,
+          Field({
+            label: 'Edge · Python 路径',
+            hint: st?.edge?.pythonOk
+              ? `已找到 Python（${st.edge.python || ''}）。一键安装后这里会自动填好。`
+              : `没找到 Python（当前：${edge.python || '默认路径'}）。可以点上面的「一键安装」，或手动填一个；填好重启桥接。`,
+            children: h('input', {
+              className: 'shl-input',
+              placeholder: 'D:\\python\\python.exe（留空用默认路径）',
+              value: edge.python || '',
+              onChange: (e) => patch('tts', 'edge', { ...edge, python: e.target.value }),
+            }),
+          }),
+          Field({
+            label: 'Edge · tts.py 路径',
+            hint: '调用 edge-tts 的脚本。一键安装会把它放进插件的 Python 目录并自动填好；手动装的话自己放一份。',
+            children: h('input', {
+              className: 'shl-input',
+              placeholder: 'D:\\tts\\tts.py（留空用默认路径）',
+              value: edge.script || '',
+              onChange: (e) => patch('tts', 'edge', { ...edge, script: e.target.value }),
             }),
           }),
         ),

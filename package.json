@@ -1,6 +1,6 @@
 {
   "name": "shoreline",
-  "version": "0.12.0",
+  "version": "0.13.1",
   "private": true,
   "description": "Shoreline —— DSH 的常驻能力层：按遗忘曲线运作的记忆、QQ 桥接、人格与角色、B 站游客态、QQ 聊天预设，统一在一个控制面板里。",
   "type": "module",

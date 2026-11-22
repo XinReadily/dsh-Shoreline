@@ -7182,8 +7182,6 @@ async function main() {
           if (!sayMatch) { sendJson({ ok: false, error: 'key 格式应为 group:群号 或 private:QQ号' }, 400); return; }
           const sayFishBlock = fishGuardSendBlock(key, getSocialV2State(key));
           if (sayFishBlock) { sendJson({ ok: false, error: sayFishBlock.error }, 403); return; }
-          const pyExe = process.env.SHORELINE_PYTHON || 'D:\\dsh-data\\whisper\\python\\python.exe';
-          const pyScript = process.env.SHORELINE_TTS_SCRIPT || 'D:\\dsh-data\\whisper\\tts.py';
           const voiceLibDir = path.isAbsolute(voice.dir || '') ? voice.dir : path.join(ROOT, voice.dir || 'audio');
           const ttsDir = path.join(voiceLibDir, 'tts');
           const tone = voiceTone();
@@ -7201,6 +7199,19 @@ async function main() {
             && String(volcCfg.voiceId || '').trim()
           );
           const useVolc = String(ttsCfg.engine || '') === 'volc' && volcReady;
+          // Edge 走本机 Python（edge-tts）：面板里填了路径就用面板的，其次环境变量，
+          // 然后是插件「一键装环境」放进来的 Python，最后才是老机器的默认路径。
+          const edgeCfg = ttsCfg.edge || {};
+          const bundledPy = path.join(os.homedir(), '.dsh', 'shoreline', 'python', process.platform === 'win32' ? 'python.exe' : 'python');
+          const bundledScript = path.join(os.homedir(), '.dsh', 'shoreline', 'python', 'tts.py');
+          const pickPath = (preferred, bundled, legacy) => {
+            const first = String(preferred || '').trim();
+            if (first) return first;
+            if (bundled && fs.existsSync(bundled)) return bundled;
+            return legacy;
+          };
+          const pyExe = pickPath(edgeCfg.python || process.env.SHORELINE_PYTHON, bundledPy, '');
+          const pyScript = pickPath(edgeCfg.script || process.env.SHORELINE_TTS_SCRIPT, bundledScript, 'D:\\dsh-data\\whisper\\tts.py');
           try {
             fs.mkdirSync(ttsDir, { recursive: true });
             const fileName = `tts-${Date.now()}.mp3`;
@@ -7259,6 +7270,12 @@ async function main() {
               engine = useV3 ? 'volc-v3' : 'volc';
               tone.instruction = instruction;
             } else {
+              if (!fs.existsSync(pyExe) || !fs.existsSync(pyScript)) {
+                throw new Error(
+                  `Edge 语音需要本机 Python（没找到 ${fs.existsSync(pyExe) ? pyScript : pyExe}）。`
+                  + ' 在控制台「语音」页签里填 Python 与 tts.py 的路径，或改用火山复刻。'
+                );
+              }
               const raw = execFileSync(pyExe, [pyScript, sayText, outFile], {
                 encoding: 'utf8',
                 timeout: 90000,

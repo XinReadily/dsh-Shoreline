@@ -1,7 +1,7 @@
 # Shoreline 交接文档
 
 > 写给下一个会话的 AI。读完这份就能接手，不需要翻旧聊天。
-> 最后更新：2026-11-22，版本 0.12.0（语音页签重排、B 站转写、QQ 空间面板补齐）
+> 最后更新：2026-11-22，版本 0.13.1（B 站转写一键安装；Edge 语音环境一键安装、桥接依赖内置、Node 检测与安装）
 
 ---
 
@@ -174,11 +174,18 @@ Shoreline 是 DSH 的常驻能力层插件，用来替代 SurfCore：
 
 **听**（ASR）
 - **QQ 语音**：不落盘、不解码，走 SnowLuma 的 OneBot action `fetch_ptt_text`（`qq_voice_text` 工具），跟着 `getMessageDetail` 开关走
-- **B 站视频**：先查 CC 字幕，没有才下载音轨 → ffmpeg 抽 16k wav → faster-whisper small（`D:\dsh-data\whisper\transcribe.py`），临时文件用完删
+- **B 站视频**：先查 CC 字幕，没有才下载音轨 → ffmpeg 抽 16k wav（没有 ffmpeg 就直接把原文件交给 whisper）→ faster-whisper small，临时文件用完删
+- **一键装转写环境**：面板「B 站 → 视频声音转写 → 一键安装转写环境」（`lib/whisper-env.js`）复用语音那份嵌入式 Python，补 `faster-whisper / ctranslate2 / av / tokenizers / onnxruntime / numpy …` 共 16 个包（`zhconv` 没有 wheel，自动回退下源码包摊平），再从来 `hf-mirror.com`（回退 huggingface.co）下 small 模型四个文件（model.bin 约 461 MB）到 `~/.dsh/shoreline/whisper/models/faster-whisper-small`，最后放 `transcribe.py` 并写回 `voice.json` 的 `asr.python/script/models`。
+  - 大文件下载带「空闲 60 秒超时 + 重试 3 次」：hf-mirror 的 model.bin 出现过连上却不吐字节的情况，没有超时就会一直挂着。
+  - 实测：依赖 16 包约 12 秒；模型命中已有文件时秒过、纯下载约几分钟；真机转写 BV1R5WH61EHR（9 分半视频）870 字符、BV1JAx36cEYA（RVC 教程）714 字符，中文正常。
+  - 纯音乐/没人声的视频 VAD 会把整段滤掉，返回空文本时会带 `note`：「这段音频里没听到人声（可能是纯音乐或没人说话）」，免得当成故障。
 
 **坑**
 - `voice.json` 不能带 BOM（PowerShell `Set-Content -Encoding UTF8` 会带），否则 JSON.parse 失败静默回落 Edge
 - Windows Python 默认 GBK，`transcribe.py` 里必须强制 stdout 为 UTF-8
+- **Edge 必须本机有 Python + edge-tts**：桥接跑 `python tts.py`。面板「语音 → Edge 环境」可以**一键安装**（`lib/python-env.js`）：从华为云下 Windows 嵌入式 Python 3.11.9，再从清华/阿里 PyPI 镜像下 edge-tts 与依赖 wheel（含 aiohttp 的 cp311-win_amd64 轮子），解压到 `~/.dsh/shoreline/python`，补 `_pth` 的 `Lib\site-packages`，最后放 `tts.py` 并写回 `voice.json`。实测 15 个包 / 26 MB / 13 秒，合成 29 KB mp3 正常。
+- 桥接选 Python 的顺序：`tts.edge.python` → `SHORELINE_PYTHON` → 插件装的那份（存在才用）→ 老机器默认 `D:\dsh-data\whisper\python\python.exe`；`tts.py` 同理。
+- 试过用纯 Node 直连 Edge TTS（`bridge/src/edge-tts.js` 保留着）：新版微软换成 `Sec-MS-GEC` v2 token（`"<16 hex>-<64 hex>"`，CS64 自定义哈希 + 改过的 SHA256，算法在 `edge_tts/drm.py` 里），手写复刻不现实且随微软改版失效，所以默认还是走 Python。
 
 ---
 
@@ -190,9 +197,9 @@ Shoreline 是 DSH 的常驻能力层插件，用来替代 SurfCore：
 - **改 `config.json` 的 purpose / fishGuard 要重启桥接**；改 `voice.json` 不用（每次现读）
 
 **会话映射（P3）**
-- 桥接新增 `GET /api/socialV2/sessions`（需要 `x-console-token`）：返回 `{ ok, cwd, sessions: [{ key, sessionId, kind, id, name, policy, active, dormant }] }`，`cwd` 是 `sessionCwd`（默认 `~/.dsh/qq-chat-work`），`key` 形如 `private:3469303325` / `group:1128910188`
+- 桥接新增 `GET /api/socialV2/sessions`（需要 `x-console-token`）：返回 `{ ok, cwd, sessions: [{ key, sessionId, kind, id, name, policy, active, dormant }] }`，`cwd` 是 `sessionCwd`（默认 `~/.dsh/qq-chat-work`），`key` 形如 `private:<ownerQQ>` / `group:<groupId>`
 - 插件 `BridgeService.readSessions()` 先调这个接口，失败才回退读 `state/sessions.json`（`source` 字段区分 `bridge` / `file`）
-- 面板「会话映射」只列这个工作区里的会话，显示「私聊 3469303325 / 群 1128910188」+ sessionId 前 8 位 + 在用/休眠/未确认
+- 面板「会话映射」只列这个工作区里的会话，显示「私聊 <ownerQQ> / 群 <groupId>」+ sessionId 前 8 位 + 在用/休眠/未确认
 - **B 站自动识别**：`qq-tool-restrict.mjs` 的 `biliSessionAllowed()` 先查桥接会话表，能对上 key 就放行；面板只列 QQ 工作区的会话，不再要求勾选其他工作区（`enabledSessions` / `enabledWorkspaces` 仍兼容旧配置）
 
 **唤醒提示**
@@ -297,9 +304,18 @@ Start-Process -FilePath 'C:\Users<user>\.dsh\dsh-runtimes\dsh-primary-runtime\de
 
 **验证**
 - `node --check <file>`
-- `node test\run.mjs` 或 `pnpm test`（10 个测试文件：mood-engine、memory-consolidate、memory-time、memory-supersede、memory-activation、memory-evidence、mood-strain、mood-tick、mood-service-migrate、workspace-scope）
+- `node test\run.mjs` 或 `pnpm test`（13 个测试文件：mood-engine、memory-consolidate、memory-time、memory-supersede、memory-activation、memory-evidence、mood-strain、mood-tick、mood-service-migrate、workspace-scope、bridge-embedded、gateway、update）
 - `node test\host-sim.mjs`（假 ctx 跑 apply：工具数、section、路由数）
 - `node C:\Users<user>\.dsh\im\_render_tabs_probe.mjs`（假 React 渲染七个页签）
+
+---
+
+## 运行环境（Node）
+
+- `lib/node-tool.js`：`nodeInfo()` 报三份 Node——DSH 自带（`process.version`）、系统 PATH 里的（`where node`）、插件自己装的（`~/.dsh/shoreline/node/*/node.exe`）；`installNode()` 从 `https://nodejs.org/dist/index.json` 挑最新 v22/v24 LTS，下载 `node-<ver>-win-x64.zip` 解压到插件目录（约 30MB）。
+- 面板「桥接/角色 → 运行环境」显示三份版本与是否满足 22+，不满足时给「安装 Node」按钮。
+- `BridgeService.resolveNode()` 的优先级：构造参数 → `SHORELINE_NODE` 环境变量 → **插件装的 Node** → `NODE_CANDIDATES`（DSH runtime、Program Files）。
+- 内置桥接的依赖已经 vendoring 到 `bridge/deps/`（94 个包 / 3692 文件 / 17.6MB，`scripts/vendor-bridge.mjs` 生成），`ensureDeps()` 优先把它链成 `bridge/node_modules`（junction），不再依赖 `~/qq-bridge-own/node_modules`。
 
 ---
 

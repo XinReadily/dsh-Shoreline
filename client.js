@@ -1630,6 +1630,8 @@ window.__ModuleLoader__.load({
       const [asr, setAsr] = useState(null);
       const [asrSt, setAsrSt] = useState(null);
       const [asrBusy, setAsrBusy] = useState(false);
+      const [envBusy, setEnvBusy] = useState(false);
+      const [envMsg, setEnvMsg] = useState('');
 
       const loadAsr = useCallback(async () => {
         try {
@@ -1669,6 +1671,29 @@ window.__ModuleLoader__.load({
           setError(String(e?.message ?? e));
         } finally {
           setAsrBusy(false);
+        }
+      };
+
+      // 一键装 faster-whisper + small 模型（复用语音那边装好的 Python）。
+      const installAsrEnv = async (force = false) => {
+        if (envBusy) return;
+        setEnvBusy(true);
+        setError('');
+        setEnvMsg('正在下载并安装…第一次约 500 MB，要等几分钟');
+        try {
+          const res = await fetch(`${API}/voice/whisper-env`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ force }),
+          });
+          const d = await res.json();
+          setEnvMsg(d?.ok ? '装好了，可以用了' : (d?.error || '安装未完成，看下面的状态'));
+          if (d?.status?.asr) setAsrSt(d.status.asr);
+          if (d?.ok) setNotice('转写环境已就绪');
+        } catch (e) {
+          setEnvMsg(String(e?.message ?? e));
+        } finally {
+          setEnvBusy(false);
         }
       };
 
@@ -1916,8 +1941,9 @@ window.__ModuleLoader__.load({
                   const missing = [];
                   if (asrSt.pythonOk === false) missing.push('Python');
                   if (asrSt.scriptOk === false) missing.push('转写脚本');
+                  if (asrSt.env?.modelOk === false) missing.push('whisper 模型');
                   if (missing.length) {
-                    return `✗ 还不能用：找不到 ${missing.join('、')}。没有 CC 字幕的视频会转不了，其余功能不受影响。`;
+                    return `✗ 还不能用：缺 ${missing.join('、')}。点下面的「一键安装转写环境」会一起装好（约 500 MB）。没有 CC 字幕的视频会转不了，其余功能不受影响。`;
                   }
                   return asrSt.ffmpegOk === false
                     ? `✓ 已就绪：${asrSt.model || 'small'} 模型。没找到 ffmpeg，会跳过抽音轨、直接让 whisper 解码原文件（慢一点）。`
@@ -1925,6 +1951,21 @@ window.__ModuleLoader__.load({
                 })(),
               )
             : h('div', { className: 'shl-note' }, '正在检查转写环境…'),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'shl-btn shl-btn-primary',
+                onClick: () => installAsrEnv(false),
+                disabled: envBusy,
+              },
+              envBusy ? '安装中…' : (asrSt?.ready ? '检查/修复转写环境' : '一键安装转写环境'),
+            ),
+          ),
+          envMsg ? h('div', { className: 'shl-note' }, envMsg) : null,
           h(Toggle, {
             label: '启用本地转写',
             checked: (asr?.enabled !== false),
@@ -1954,12 +1995,12 @@ window.__ModuleLoader__.load({
               label: 'Python 路径',
               hint: asrSt?.pythonOk
                 ? '是 faster-whisper 的便携解释器（自带依赖，不用系统 Python）。'
-                : '当前找不到。留空 = 用 D:\\dsh-data\\whisper\\python\\python.exe。',
+                : '当前找不到。留空 = 用「一键安装」装到 ~/.dsh/shoreline/python 的那份。',
             },
             h('input', {
               className: 'shl-input',
               value: asrSt?.python || asr?.python || '',
-              placeholder: 'D:\\dsh-data\\whisper\\python\\python.exe',
+              placeholder: 'C:\\Users\\<user>\\.dsh\\shoreline\\python\\python.exe',
               onChange: (e) => patchAsr('python', e.target.value),
             }),
           ),
@@ -1969,7 +2010,7 @@ window.__ModuleLoader__.load({
               label: '转写脚本',
               hint: asrSt?.scriptOk
                 ? '真正跑 whisper 的那个 Python 脚本。'
-                : '当前找不到。留空 = 用 D:\\dsh-data\\whisper\\transcribe.py。',
+                : '当前找不到。留空 = 用「一键安装」放的那份。',
             },
             h('input', {
               className: 'shl-input',
@@ -2393,6 +2434,8 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('');
       const [ok, setOk] = useState('');
       const [busy, setBusy] = useState(false);
+      const [envBusy, setEnvBusy] = useState(false);
+      const [envMsg, setEnvMsg] = useState('');
 
       const load = useCallback(async () => {
         setError('');
@@ -2451,6 +2494,31 @@ window.__ModuleLoader__.load({
           setBusy(false);
         }
       }, [draft]);
+
+      const installEnv = useCallback(async (force = false) => {
+        setEnvBusy(true);
+        setEnvMsg('');
+        setError('');
+        try {
+          const res = await fetch(`${API}/voice/edge-env`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ force }),
+          });
+          const data = await res.json();
+          if (!data?.ok) throw new Error(data?.error || data?.env?.error || '安装失败');
+          if (data.config) setCfg(data.config);
+          if (data.status) setSt(data.status);
+          if (data.config) setDraft(data.config);
+          const sizeMb = Math.round((data.env?.sizeBytes ?? 0) / 1024 / 1024);
+          setEnvMsg(`装好了：${data.env?.python || ''}（约 ${sizeMb} MB）。重启桥接后 Edge 就能用。`);
+        } catch (e) {
+          setEnvMsg('');
+          setError(e?.message || '安装失败');
+        } finally {
+          setEnvBusy(false);
+        }
+      }, []);
 
       if (!draft) {
         return h(
@@ -2540,11 +2608,55 @@ window.__ModuleLoader__.load({
           ),
           Field({
             label: 'Edge 音色',
-            hint: 'Edge 不需要密钥，随时能出声。键里换成别的 voice_id 也可以，例如 zh-CN-XiaoxiaoNeural。',
+            hint: 'Edge 不需要密钥。换成别的 voice_id 也可以，例如 zh-CN-XiaoxiaoNeural。',
             children: h('input', {
               className: 'shl-input',
               value: edge.voice || '',
               onChange: (e) => patch('tts', 'edge', { ...edge, voice: e.target.value }),
+            }),
+          }),
+          h(
+            'div',
+            { className: 'shl-note' },
+            st?.edge?.env?.ready
+              ? `Edge 环境：已就绪（Python ${st.edge.env.python || ''}，约 ${Math.round((st.edge.env.sizeBytes || 0) / 1024 / 1024)} MB）`
+              : `Edge 环境：未安装。点下面按钮会下载 Windows 嵌入式 Python 3.11 + edge-tts（约 40 MB，落在 ~/.dsh/shoreline/python）。`,
+          ),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'shl-btn',
+                disabled: envBusy || busy,
+                onClick: () => installEnv(false),
+              },
+              envBusy ? '正在安装…' : (st?.edge?.env?.ready ? '重新安装 Edge 环境' : '一键安装 Edge 环境'),
+            ),
+          ),
+          envMsg ? h('div', { className: 'shl-ok' }, envMsg) : null,
+          Field({
+            label: 'Edge · Python 路径',
+            hint: st?.edge?.pythonOk
+              ? `已找到 Python（${st.edge.python || ''}）。一键安装后这里会自动填好。`
+              : `没找到 Python（当前：${edge.python || '默认路径'}）。可以点上面的「一键安装」，或手动填一个；填好重启桥接。`,
+            children: h('input', {
+              className: 'shl-input',
+              placeholder: 'D:\\python\\python.exe（留空用默认路径）',
+              value: edge.python || '',
+              onChange: (e) => patch('tts', 'edge', { ...edge, python: e.target.value }),
+            }),
+          }),
+          Field({
+            label: 'Edge · tts.py 路径',
+            hint: '调用 edge-tts 的脚本。一键安装会把它放进插件的 Python 目录并自动填好；手动装的话自己放一份。',
+            children: h('input', {
+              className: 'shl-input',
+              placeholder: 'D:\\tts\\tts.py（留空用默认路径）',
+              value: edge.script || '',
+              onChange: (e) => patch('tts', 'edge', { ...edge, script: e.target.value }),
             }),
           }),
         ),
@@ -3191,6 +3303,8 @@ window.__ModuleLoader__.load({
       const [gwKind, setGwKind] = useState('');
       const [upd, setUpd] = useState(null);
       const [updBusy, setUpdBusy] = useState(false);
+      const [nodeEnv, setNodeEnv] = useState(null);
+      const [nodeBusy, setNodeBusy] = useState(false);
 
       const loadStatus = async (announce) => {
         const fails = [];
@@ -3202,12 +3316,13 @@ window.__ModuleLoader__.load({
             return { ok: false, data: null };
           }
         };
-        const [st, ss, sl, cs, gw] = await Promise.all([
+        const [st, ss, sl, cs, gw, nd] = await Promise.all([
           get('/bridge/status'),
           get('/bridge/sessions'),
           get('/bridge/snowluma'),
           get('/bridge/console'),
           get('/bridge/gateway'),
+          get('/bridge/node'),
         ]);
         if (st.ok) setStatus(st.data?.bridge ?? null);
         if (ss.ok) {
@@ -3216,6 +3331,7 @@ window.__ModuleLoader__.load({
         }
         if (sl.ok) setSnowluma(sl.data?.snowluma ?? null);
         if (cs.ok) setConsoleInfo(cs.data ?? null);
+        if (nd.ok && nd.data) setNodeEnv(nd.data);
         if (gw.ok && gw.data?.ok) {
           setGateway(gw.data);
           setGwHome((prev) => (prev == null ? (gw.data.home || '') : prev));
@@ -3344,6 +3460,22 @@ window.__ModuleLoader__.load({
           setError(String(e?.message ?? e));
         } finally {
           setBusy(false);
+        }
+      };
+
+      const installNodeNow = async () => {
+        setNodeBusy(true);
+        setError('');
+        setOk('');
+        try {
+          const data = await api('/bridge/node/install', { method: 'POST', body: '{}' });
+          if (data.ok === false) throw new Error(data.error || '安装 Node 失败');
+          setOk(data.already ? `已经装好了：${data.version}（${data.exe}）` : `Node ${data.version} 已装到 ${data.home}`);
+          await loadStatus();
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        } finally {
+          setNodeBusy(false);
         }
       };
 
@@ -3551,6 +3683,39 @@ window.__ModuleLoader__.load({
           ),
           h('div', { className: 'shl-note' }, 'OpenQQ 装好后先在它的 WebUI 里扫码登录 QQ，再在网络配置里打开 OneBot v11 的 WebSocket（默认 3001）；桥接会读它的 config/openqq.json 拿端口和 token。'),
           gateway?.hint ? h('div', { className: 'shl-note' }, gateway.hint) : null,
+        ),
+        h(
+          'div',
+          { className: 'shl-section' },
+          h('h4', { className: 'shl-h4' }, '运行环境'),
+          h(
+            'div',
+            { className: 'shl-kv' },
+            h('span', null, 'DSH 自带'),
+            h('b', null, nodeEnv?.dsh || '—'),
+            h('span', null, '系统 Node'),
+            h('b', null, nodeEnv?.system?.version || '没找到'),
+            h('span', null, '插件内置'),
+            h('b', null, nodeEnv?.installed?.version || '未安装'),
+            h('span', null, '状态'),
+            h('b', null, nodeEnv?.usable ? `可用（${nodeEnv.usable.version}）` : `需要 ${nodeEnv?.minMajor ?? 22}+`),
+          ),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h(
+              'button',
+              { className: 'shl-btn', disabled: nodeBusy || Boolean(nodeEnv?.usable), onClick: installNodeNow },
+              nodeEnv?.usable ? '已就绪' : '安装 Node',
+            ),
+          ),
+          h(
+            'div',
+            { className: 'shl-note' },
+            nodeEnv?.usable
+              ? 'OpenQQ、桥接子进程都能用这个 Node；DSH 自己跑在它自带的 Node 上，不受影响。'
+              : nodeEnv?.hint || '没找到 Node 22+。点「安装 Node」会从 nodejs.org 下载官方 Windows 版解压到插件目录（约 30MB），不用自己配环境。',
+          ),
         ),
         h(
           'div',

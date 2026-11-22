@@ -17,6 +17,8 @@
       const [asr, setAsr] = useState(null);
       const [asrSt, setAsrSt] = useState(null);
       const [asrBusy, setAsrBusy] = useState(false);
+      const [envBusy, setEnvBusy] = useState(false);
+      const [envMsg, setEnvMsg] = useState('');
 
       const loadAsr = useCallback(async () => {
         try {
@@ -56,6 +58,29 @@
           setError(String(e?.message ?? e));
         } finally {
           setAsrBusy(false);
+        }
+      };
+
+      // 一键装 faster-whisper + small 模型（复用语音那边装好的 Python）。
+      const installAsrEnv = async (force = false) => {
+        if (envBusy) return;
+        setEnvBusy(true);
+        setError('');
+        setEnvMsg('正在下载并安装…第一次约 500 MB，要等几分钟');
+        try {
+          const res = await fetch(`${API}/voice/whisper-env`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ force }),
+          });
+          const d = await res.json();
+          setEnvMsg(d?.ok ? '装好了，可以用了' : (d?.error || '安装未完成，看下面的状态'));
+          if (d?.status?.asr) setAsrSt(d.status.asr);
+          if (d?.ok) setNotice('转写环境已就绪');
+        } catch (e) {
+          setEnvMsg(String(e?.message ?? e));
+        } finally {
+          setEnvBusy(false);
         }
       };
 
@@ -303,8 +328,9 @@
                   const missing = [];
                   if (asrSt.pythonOk === false) missing.push('Python');
                   if (asrSt.scriptOk === false) missing.push('转写脚本');
+                  if (asrSt.env?.modelOk === false) missing.push('whisper 模型');
                   if (missing.length) {
-                    return `✗ 还不能用：找不到 ${missing.join('、')}。没有 CC 字幕的视频会转不了，其余功能不受影响。`;
+                    return `✗ 还不能用：缺 ${missing.join('、')}。点下面的「一键安装转写环境」会一起装好（约 500 MB）。没有 CC 字幕的视频会转不了，其余功能不受影响。`;
                   }
                   return asrSt.ffmpegOk === false
                     ? `✓ 已就绪：${asrSt.model || 'small'} 模型。没找到 ffmpeg，会跳过抽音轨、直接让 whisper 解码原文件（慢一点）。`
@@ -312,6 +338,21 @@
                 })(),
               )
             : h('div', { className: 'shl-note' }, '正在检查转写环境…'),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'shl-btn shl-btn-primary',
+                onClick: () => installAsrEnv(false),
+                disabled: envBusy,
+              },
+              envBusy ? '安装中…' : (asrSt?.ready ? '检查/修复转写环境' : '一键安装转写环境'),
+            ),
+          ),
+          envMsg ? h('div', { className: 'shl-note' }, envMsg) : null,
           h(Toggle, {
             label: '启用本地转写',
             checked: (asr?.enabled !== false),
@@ -341,12 +382,12 @@
               label: 'Python 路径',
               hint: asrSt?.pythonOk
                 ? '是 faster-whisper 的便携解释器（自带依赖，不用系统 Python）。'
-                : '当前找不到。留空 = 用 D:\\dsh-data\\whisper\\python\\python.exe。',
+                : '当前找不到。留空 = 用「一键安装」装到 ~/.dsh/shoreline/python 的那份。',
             },
             h('input', {
               className: 'shl-input',
               value: asrSt?.python || asr?.python || '',
-              placeholder: 'D:\\dsh-data\\whisper\\python\\python.exe',
+              placeholder: 'C:\\Users\\<user>\\.dsh\\shoreline\\python\\python.exe',
               onChange: (e) => patchAsr('python', e.target.value),
             }),
           ),
@@ -356,7 +397,7 @@
               label: '转写脚本',
               hint: asrSt?.scriptOk
                 ? '真正跑 whisper 的那个 Python 脚本。'
-                : '当前找不到。留空 = 用 D:\\dsh-data\\whisper\\transcribe.py。',
+                : '当前找不到。留空 = 用「一键安装」放的那份。',
             },
             h('input', {
               className: 'shl-input',

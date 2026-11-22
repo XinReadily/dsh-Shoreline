@@ -8,7 +8,7 @@ node_modules/
 Thumbs.db
 .env
 
-# 内置桥接运行时产物：配置里有控制台口令，状态里有聊天记录
+# 内置桥接的运行时产物（配置里有控制台口令，状态里有聊天记录）
 bridge/config.json
 bridge/state/
 .update-cache.json
