@@ -1,7 +1,7 @@
 # Shoreline 交接文档
 
 > 写给下一个会话的 AI。读完这份就能接手，不需要翻旧聊天。
-> 最后更新：2026-11-20，版本 0.8.3
+> 最后更新：2026-11-22，版本 0.12.0（语音页签重排、B 站转写、QQ 空间面板补齐）
 
 ---
 
@@ -40,18 +40,19 @@ Shoreline 是 DSH 的常驻能力层插件，用来替代 SurfCore：
 | 记忆数据 | `C:\Users<user>\.dsh\shoreline\memory\memories.json` + `inbox.jsonl` + `events.jsonl` |
 | 情感数据 | `C:\Users<user>\.dsh\shoreline\mood\state.json` |
 | 语音配置 | `C:\Users<user>\.dsh\shoreline\voice.json` |
-| QQ 桥接 | `C:\Users<user>\qq-bridge-own`（独立 node 进程，自己的 `config.json` / `state/`） |
+| QQ 桥接 | 默认仍用已装好的 `C:\Users<user>\qq-bridge-own`；没有时用插件内置 `bridge\`（见下节「内置桥接」） |
+| 内置桥接 | `C:\Users<user>\.dsh\plugins\shoreline\bridge\`（`scripts\vendor-bridge.mjs` 从桥接源码同步）；运行时生成 `bridge\config.json` 与 `bridge\state\`（已 gitignore） |
 | 媒体与模型 | `D:\dsh-data\bili-feed`（抽帧）、`D:\dsh-data\whisper`（Python + faster-whisper + 模型） |
 | 临时脚本 | `C:\Users<user>\.dsh\im\_*.mjs`（探针/迁移脚本，不属插件） |
-| QQ 空间 | 外部插件 `C:\Users<user>\.dsh\plugins\dsh-qzone-post`（link 进 profile），配置 `C:\Users<user>\.dsh\qzone-self-config.json`，状态 `C:\Users<user>\.dsh\qzone-self\state.json`；工具 `qzone_state` / `qzone_publish` / `qzone_profile` / `qzone_avatar`，已加入 `qq-tool-restrict.mjs` 的 SAFE_EXACT；默认好友可见、2 小时冷却、每天 2 条 |
+| QQ 空间 | **桥接内置**（P4）：`POST /api/socialV2/qzone`，body `{ key, tool: 'state'|'publish'|'profile'|'avatar'|'settings', ... }`；工具 `qzone_state` / `qzone_publish` / `qzone_profile` / `qzone_avatar` 由 `mcp-snowluma-safe.js` 注册，已加入 `qq-tool-restrict.mjs` 的 SAFE_EXACT。走协议端 OneBot 接口（`get_qzone_msg_list` / `send_qzone_msg` / `set_qq_profile` / `set_qq_avatar`），不依赖外部插件、不用浏览器；限频与开关存在 `config.json` 的 `socialV2.qzone`（每天按自然日算，默认 2 条、每分钟 2 条、600 字），支持 `dryRun` 演练；面板「QQ 空间」页签有总览 / 发布 / 资料 / 头像 / 设置 / 最近说说 / 最近操作；旧 `dsh-qzone-post` 已从 profile 注销 |
 
 ---
 
-## 面板：七个页签
+## 面板：八个页签
 
-记忆 / 情感·状态 / 语音 / 桥接·角色 / B站 / 目的引擎 / 防刷屏
+记忆 / 情感·状态 / 语音 / 桥接·角色 / QQ 空间 / B站 / 目的引擎 / 防刷屏
 
-挂载点 `settings.section`。面板是「片段 + 拼接」：源码在 `client\00-boot.js` … `client\99-root.js`（12 个，按文件名排序拼接），产物 `client.js` 约 2800 行。
+挂载点 `settings.section`。面板是「片段 + 拼接」：源码在 `client\00-boot.js` … `client\99-root.js`（13 个，按文件名排序拼接），产物 `client.js` 约 3200 行。
 **改了片段必须跑 `node scripts\build-client.mjs`**，否则页面还是旧的；`--check` 只比对不写。
 
 ---
@@ -161,7 +162,9 @@ Shoreline 是 DSH 的常驻能力层插件，用来替代 SurfCore：
 ## 语音
 
 **说**（TTS）
-- 两条路：Edge（兜底、无密钥）、火山声音复刻（她的音色）
+- 两条路：Edge（无密钥，火山不生效时用它）、火山声音复刻（她的音色）
+- 面板「语音」页签结构：顶部状态只显示当前引擎；区块 1 = 总开关 + Edge/火山复刻切换 + Edge 音色；区块 2 = 火山 v1 的全部参数；区块 3 = 火山 v3 的全部参数
+- **总开关** `tts.enabled`：关掉后 say 端点直接 403（`语音合成已关闭`），不会偷偷回落 Edge
 - 火山 v3：`POST https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse`
   - `X-Api-Resource-Id: seed-icl-2.0`（字符版，配额 10；写 `volc.megatts.voiceclone` 会报并发超限，那是并发版配额 0）
   - body 里 `req_params.audio_params.speech_rate = -10`（默认值，慢一点更自然）
@@ -185,6 +188,12 @@ Shoreline 是 DSH 的常驻能力层插件，用来替代 SurfCore：
 - 控制台 3100，`config.json` 里的 `consoleToken`
 - Shoreline 负责：状态、会话映射、日志尾部、启停、SnowLuma 启动、目的引擎参数、防刷屏参数
 - **改 `config.json` 的 purpose / fishGuard 要重启桥接**；改 `voice.json` 不用（每次现读）
+
+**会话映射（P3）**
+- 桥接新增 `GET /api/socialV2/sessions`（需要 `x-console-token`）：返回 `{ ok, cwd, sessions: [{ key, sessionId, kind, id, name, policy, active, dormant }] }`，`cwd` 是 `sessionCwd`（默认 `~/.dsh/qq-chat-work`），`key` 形如 `private:3469303325` / `group:1128910188`
+- 插件 `BridgeService.readSessions()` 先调这个接口，失败才回退读 `state/sessions.json`（`source` 字段区分 `bridge` / `file`）
+- 面板「会话映射」只列这个工作区里的会话，显示「私聊 3469303325 / 群 1128910188」+ sessionId 前 8 位 + 在用/休眠/未确认
+- **B 站自动识别**：`qq-tool-restrict.mjs` 的 `biliSessionAllowed()` 先查桥接会话表，能对上 key 就放行；面板只列 QQ 工作区的会话，不再要求勾选其他工作区（`enabledSessions` / `enabledWorkspaces` 仍兼容旧配置）
 
 **唤醒提示**
 - 时间锚点每轮现算：`【现在是 Y/M/D HH:mm（上午/下午/晚上）】…现在几点只看这一行`（原来只有日期，导致把早上当现在）
@@ -217,16 +226,56 @@ Shoreline 是 DSH 的常驻能力层插件，用来替代 SurfCore：
 - `POST /api/socialV2/close`，参数 `summary` / `nextOpening` / `reason` / `throughSeq`
 - 不改变任何唤醒状态；三道限制：① 最后一句是提问/求助且她没接过话 → 拒绝；② 这段已收过尾、对方还没再开口 → 拒绝；③ 名额与唤醒条件都不动
 
+**内置桥接（P1，2026-11-22）**
+- 源码在 `bridge\`（`node scripts\vendor-bridge.mjs` 从 `qq-bridge-own` 同步，`--check` 只比对）；同步内容 99 个文件 / 约 2.3MB：`src\**\*.{js,mjs}`（含 `gateway-conn.js`）、`scripts\build-agent-preset-patches.mjs`（`bridge.js` 顶层 import，缺了起不来）、`dsh\agent-presets\`（预设源）、`plugins\qq-agent-presets\`（preset patch 与守卫）、`public\console.html` + `control-center.html`（缺了控制台报「控制台页面缺失」）、元数据
+- 根目录解析顺序：`options.bridgeRoot` → 已装好的 `~\qq-bridge-own`（存在 `src\bridge.js`）→ 插件自带 `bridge\`
+- 首次运行 `ensureConfig()` 用 `config.example.json` 生成 `bridge\config.json`：随机 32 位 `consoleToken`、`sessionCwd` 默认 `~\.dsh\qq-chat-work`、`agentPreset` 保持 `qq-chat`、`socialV2.agentPreset` 默认 `qq-chat-v2`、`bridge.consoleBase` 由 `consolePort` 推出
+- 依赖：`ensureDeps()` 在 `bridge\node_modules` 缺失时，用 Windows junction 链到 `~\qq-bridge-own\node_modules`（不复制 200MB）；旧安装也没有就返回可读提示，不会静默失败
+- `bridge\config.json` 与 `bridge\state\` 已 gitignore（配置里有口令，状态里有聊天记录）
+- 自动拉起沿用 `autoStartBridge`：插件启动 3 秒后检查 3100，没在跑就 spawn `src\bridge.js`
+- 浏览器控制台：与外部桥接是同一份 `bridge.js` 起的同一个 HTTP 服务，`http://127.0.0.1:<consolePort>/?token=<consoleToken>`，实测 200 / 276KB / 标题「QQ 桥接控制台」；面板「打开控制台」按钮会自动带口令
+- **同一时间只能跑一个桥接**：端口都是 3100，两个一起开会抢同一个 SnowLuma WS 连接、重复回复
+- 内置与外部实例的数据互相独立：内置的 `state\` 从零开始，白名单、ownerQQ、SnowLuma 地址、会话 agentToken 都要重新填
+- 测试：`test\bridge-embedded.test.mjs`（根目录解析、首次生成、口令随机、不覆盖已有配置、缺依赖报错、status 自动补配置、vendored 关键文件齐全）
+
+**网关：SnowLuma / OpenQQ（P2，2026-11-22）**
+- SnowLuma 团队已转私有、不再提供下载；已装机器可继续用。可替代的是 OpenQQ（`https://github.com/feijx3/OpenQQ`，AGPL-3.0）。
+- 两者都是 OneBot v11，桥接新增 `src\gateway-conn.js` 做统一发现，`config.json` 新增 `gateway` 段：
+  - `gateway.kind`：`auto`（默认，先探测 SnowLuma 的 ws 端口，不在再找 OpenQQ）/ `snowluma` / `openqq`
+  - `gateway.openqqHome`：OpenQQ 目录（留空则依次找 `%USERPROFILE%\OpenQQ`、`C:\OpenQQ`、`D:\OpenQQ`、`E:\OpenQQ`，或环境变量 `OPENQQ_HOME`）
+- OpenQQ 配置读 `config\openqq.json`：`accessToken` 一个令牌同时用于正向 WS 与 HTTP；默认 `ws.port=3001`、`webPort=17860`、`http` 默认关闭（示例端口 5700）
+- 启动时 `resolveGateway()` 只做「端口开没开」的探测（不发 OneBot 动作），命中 OpenQQ 就把端点/令牌写进 `cfg.snowluma`（下游代码不用改），并打日志；**OpenQQ 的 HTTP 服务没开时会明确警告**：发语音、拉收藏表情、取消息详情这些走 HTTP 的工具会失败
+- 法律边界：SnowLuma 原生组件禁止并入第三方安装包/自动化脚本部署（EULA §5.4、LICENSE §5）→ 只能检测 + 引导；OpenQQ 可以一键下载安装，但登录要用户自己扫码
+- 面板「桥接」页的「网关」区块（`client\90-bridge-panel.js`）：显示当前生效的是哪个、下拉切 `auto/只用 SnowLuma/只用 OpenQQ`、可改 OpenQQ 目录并保存；两个网关各有状态行与「启动」按钮，OpenQQ 另有「安装 OpenQQ」（已装时变成「重新检查安装」）
+- 插件侧 API（前缀 `/dsh-shoreline/api/bridge`）：`GET /gateway`、`POST /gateway`（只改 `gateway` 段，写前备份 `config.json.bak-before-gateway-<ts>`，返回 `requiresRestart: true`）、`POST /gateway/install-openqq`、`POST /gateway/start-openqq`
+- 一键安装（`lib\bridge\openqq.js`）：读 GitHub `releases/latest` 挑 `win*x64*.zip` → 流式下载到临时目录 → 自己解析 zip 中央目录解压（只支持 method 0 存储与 8 deflate，路径穿越已挡）→ 顶层单目录自动提平 → 已装（有 `src\main.mjs`）就跳过
+- 一键启动：用 DSH 自带 node `spawn('src/main.mjs','start')`（cwd=OpenQQ 目录、detached），等 WebUI 端口（默认 17860）25 秒，成功就打开浏览器；首次会进配置向导，扫码登录后 OneBot 才工作
+- 测试：`test\gateway.test.mjs` 8 项（安装判定、读 openqq.json、zip 解析/解压、提平目录、gatewayStatus、saveGateway 只动 gateway 段并留备份、非法 kind 忽略）；全量 12 个测试文件通过
+- **注意**：网关选择与 `gateway` 段要**重启桥接**才生效；OpenQQ 的 OneBot v11 正向 WS 端口默认 3001，与 SnowLuma 默认端口相同——两边不能同时开，切之前先停另一个
+
 ---
 
 ## QQ 聊天预设
 
-- `presets/qq-chat.patch.yml` 与 `qq-chat-v2.patch.yml`，从 SurfCore 搬来
-- `package.json` 的 `dsh.bundle.patch` 是**数组**，三个文件都要挂
+- `presets/qq-chat.patch.yml` 与 `qq-chat-v2.patch.yml` 随插件分发（真实版，2026-11-22 核对：无 QQ 号、无本机路径、无令牌），别人装插件就自带仿真提示词，不需要额外的东西
+- `package.json` 的 `dsh.bundle.patch` 是**数组**，三个文件都要挂（cordis + 两个 preset）
+- 桥接侧也有一份同源副本（`~\qq-bridge-own\plugins\qq-agent-presets`，五个 patch），那是桥接自己的插件，**不要注册进 profile**——否则和插件这份重复插入
 - 预设以 patch 形态装配（DSH 0.1.7 起 `~/.dsh/.agent-presets/<id>/` 已不再被读取）：改完源文件要跑
-  `node scripts\build-agent-preset-patches.mjs` 重生成 patch，再重启 DSH
+  `node scripts\build-agent-preset-patches.mjs`（在桥接目录）重生成 patch 再重启 DSH
 - 控制台的「同步状态」看的是 patch 文件内容是否与源一致，不是那个废弃目录
-- `qq-tool-restrict.mjs` 是执行期白名单：**新工具必须手动加进 `SAFE_EXACT`**，否则 QQ 里调用会被拒
+- `qq-tool-restrict.mjs` 是执行期白名单：**新工具必须手动加进 `SAFE_EXACT`**，否则 QQ 里调用会被拒（qzone 四个工具已加）
+
+---
+
+## 自动检测更新（P5）
+
+- 模块：`lib\update.js`。面板「桥接」页的「插件版本」卡片，接口 `GET /dsh-shoreline/api/bridge/update?force=1` 与 `POST .../update`。
+- 检查顺序：GitHub `releases/latest`（有 release 就比版本号）→ 没有 release 就比 `commits/main` 的 sha 与仓库里 `package.json` 的 version。结果有 30 分钟内存缓存，另把最近看到的 commit sha 记在插件根目录 `.update-cache.json`（已 gitignore）。
+- 判定：远端版本更高 → 「有新版本」；版本相同但 main 提交变了 → 也算有更新；远端版本更低 → `ahead:true`（本地是开发版），不提示更新。
+- 一键更新：下载 `codeload.github.com/<repo>/tar.gz/<ref>`（默认 release 的 tag，没 release 用 main），内存里 gunzip + 解 tar，只覆盖插件目录里的代码文件；**永远跳过** `presets/`（真实提示词）、`bridge/config.json`、`bridge/state/`、`node_modules/`、`.git/`、`state/`、`*.bak-*`。被覆盖的旧文件先备份到 `.update-backup-<时间戳>/`。
+- 仓库地址默认 `XinReadily/qq_agent_Shoreline`，可用环境变量 `SHORELINE_REPO` 或请求里的 `repo` 覆盖（fork 的人改这个）。
+- **本机 TLS 注意**：GitHub 被 hosts 指到 127.0.0.1 的本地代理时，证书链是代理自签的。更新模块会先 `dns.lookup` 目标地址，解析到 `127.*` / `::1` 就只对这次请求关掉证书校验（链路只在本机）；解析到公网地址时保持校验。也可显式设 `SHORELINE_INSECURE_TLS=1`，或给 DSH 的 node 加 `--use-system-ca`。
+- 更新完必须重启 DSH（加载新的 JS/MCP 工具）。
 
 ---
 
@@ -236,7 +285,7 @@ Shoreline 是 DSH 的常驻能力层插件，用来替代 SurfCore：
 - 改 `client\*.js` / CSS → `node scripts\build-client.mjs` → 刷新页面
 - 改 host 侧代码（`index.js` / `lib/`）→ 重启 DSH
 - 改 `bridge.js` / `config.json` → 重启桥接
-- 改预设源文件 → `node scripts\build-agent-preset-patches.mjs` → 重启 DSH
+- 改预设源文件（`~\qq-bridge-own\dsh\agent-presets\qq-chat-v2\agent.cordis.yml`）→ 在 `~\qq-bridge-own` 跑 `node scripts\build-agent-preset-patches.mjs` → 重启 DSH
 
 **重启桥接**
 ```
@@ -262,6 +311,8 @@ Start-Process -FilePath 'C:\Users<user>\.dsh\dsh-runtimes\dsh-primary-runtime\de
 4. **三个开口口子各行其是**，activity 只管得到目的引擎。
 5. `memory/service.js`、`mood/service.js`、`voice/service.js` 各写了一遍「原子写 + JSON 读 + mtime 缓存」。
 6. 目的引擎字段定义写三遍（`PANEL_SPEC` / `DEFAULT_PURPOSE_CONFIG` / 前端 `purposePayload`）。
+7. ~~**一键更新只写不删**~~ 已解决：`applyUpdate` 会收集本次压缩包里的文件（`seen`），对 `client/`、`lib/`、`test/`、`scripts/`、`public/` 里这次没有的代码文件先备份到 `.update-backup-<时间戳>/` 再删除（`pruneStale`，只删 `.js/.mjs/.cjs/.json/.css/.html`）；返回值带 `pruned`，面板显示「清理 N 个过期文件」。
+8. ~~**QQ 空间配额记在内存里**~~ 已解决：桥接把发布记录落到 `state/qzone-quota.json`（`loadQzonePostLog` / `saveQzonePostLog`），启动时加载、只保留 24 小时内的记录，重启后计数不再清零（实测写入一条 → 重启 → `todayCount=1`，删文件 → 重启 → `0`）。
 
 ---
 

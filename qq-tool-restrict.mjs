@@ -183,23 +183,39 @@ const SAFE_EXACT = new Set([
   // 记忆曲线（dsh-memory-curve）：纯本地 JSON 存取，不读任意文件、不执行命令。
   // 只列这 5 个名字，等价于「按工具名白名单」，不是按插件整体放行。
   'memory_search', 'memory_remember', 'memory_fact', 'memory_stats', 'memory_review',
-  // 情感：读写的只是 ~/.dsh/shoreline/mood/state.json（五个 0–100 的数），
+  // 情感：读写的只是 ~/.dsh/shoreline/mood/state.json（五个数），
   // 不碰工作区、不触网、不执行命令。不放进来的话 QQ 里她一次都推不动。
   'mood_shift',
-  // QQ 空间（dsh-qzone-post）：只通过 SnowLuma 的 send_qzone_msg 等动作操作她自己
-  // 的 QQ 空间，不读工作区、不执行命令、不碰浏览器。她要用发说说就得放行。
+  // QQ 空间（桥接内置的 /api/socialV2/qzone）：只走协议端空间接口发说说/改资料，不碰文件、不执行命令。
   'qzone_state', 'qzone_publish', 'qzone_profile', 'qzone_avatar',
 ])
 
 const BILI_CONFIG = process.env.BILI_FEED_CONFIG
   || path.join(os.homedir(), '.dsh', 'bili-feed', 'config.json')
 const QQ_SESSIONS = process.env.QQ_SESSIONS_FILE
-  || 'D:/surfcore/state/sessions.json'
+  || path.join(os.homedir(), '.dsh', 'qq-bridge-own', 'state', 'sessions.json')
+const QQ_SESSIONS_FALLBACKS = [
+  path.join(os.homedir(), '.dsh', 'plugins', 'shoreline', 'bridge', 'state', 'sessions.json'),
+  'D:/surfcore/state/sessions.json',
+]
 const DSH_WORKSPACES = process.env.DSH_WORKSPACES_FILE
   || path.join(os.homedir(), '.dsh', 'storages', 'workspace.json')
+const QQ_WORKSPACE = (process.env.QQ_CHAT_WORKSPACE
+  || path.join(os.homedir(), '.dsh', 'qq-chat-work')).replace(/[\\/]+$/, '').toLowerCase()
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch { return fallback }
+}
+
+/** 读桥接的会话表：主路径不在就试内置桥接与旧 SurfCore 的路径。 */
+function readQqSessions() {
+  const direct = readJson(QQ_SESSIONS, null)
+  if (direct) return direct
+  for (const file of QQ_SESSIONS_FALLBACKS) {
+    const parsed = readJson(file, null)
+    if (parsed) return parsed
+  }
+  return {}
 }
 
 /** 只允许读 B 站抽帧目录里的图片，其他 read_image 一律不放开。 */
@@ -212,7 +228,13 @@ function biliFrameImageAllowed(exec) {
     && /\.(jpe?g|png|webp)$/i.test(target)
 }
 
-/** B 站工具按工作区/会话启用；配置缺失时保持旧行为（全放行）。 */
+/**
+ * B 站工具自动按「是不是 QQ 聊天工作区的会话」放行：
+ * - 在桥接的会话表里（key -> sessionId）→ 是 QQ 会话，直接放行；
+ * - 或者所在 workspace 的 path 就是 QQ 工作区 → 放行；
+ * - 面板里显式勾过的（enabledSessions / enabledWorkspaces）仍然认；
+ * - 配置文件不存在时保持旧行为（全放行）。
+ */
 function biliSessionAllowed(exec) {
   const cfg = readJson(BILI_CONFIG, null)
   if (!cfg) return true
@@ -220,12 +242,18 @@ function biliSessionAllowed(exec) {
   if (!sessionId) return false
   const enabledSessions = Array.isArray(cfg.enabledSessions) ? cfg.enabledSessions : []
   const enabledWorkspaces = Array.isArray(cfg.enabledWorkspaces) ? cfg.enabledWorkspaces : []
-  const map = readJson(QQ_SESSIONS, {})
+  const map = readQqSessions()
   const key = Object.entries(map.sessions || {}).find(([, id]) => id === sessionId)?.[0]
   if (enabledSessions.includes(sessionId) || (key && enabledSessions.includes(key))) return true
+  // 自动识别：桥接只给 QQ 会话建映射，能对上就是 QQ 会话
+  if (key) return true
   const spaces = readJson(DSH_WORKSPACES, {})
-  const workspaceId = Object.entries(spaces?.tables?.workspaces || {})
-    .find(([, w]) => Array.isArray(w.sessionIds) && w.sessionIds.includes(sessionId))?.[0]
+  const entry = Object.entries(spaces?.tables?.workspaces || {})
+    .find(([, w]) => Array.isArray(w.sessionIds) && w.sessionIds.includes(sessionId))
+  if (!entry) return false
+  const [workspaceId, workspace] = entry
+  const workspacePath = String(workspace?.path ?? '').replace(/[\\/]+$/, '').toLowerCase()
+  if (workspacePath && workspacePath === QQ_WORKSPACE) return true
   return Boolean(workspaceId && enabledWorkspaces.includes(workspaceId))
 }
 

@@ -871,6 +871,7 @@ window.__ModuleLoader__.load({
       { key: 'mood', label: '情感/状态', title: '情感/状态' },
       { key: 'voice', label: '语音', title: '语音' },
       { key: 'bridge', label: '桥接/角色', title: '桥接/角色' },
+      { key: 'qzone', label: 'QQ 空间', title: 'QQ 空间' },
       { key: 'bili', label: 'B站', title: 'B站' },
       { key: 'purpose', label: '目的引擎', title: '目的引擎' },
       { key: 'fish', label: '防刷屏', title: '防刷屏' },
@@ -881,6 +882,7 @@ window.__ModuleLoader__.load({
       mood: '不是「她是什么人」，而是「此刻什么状态」。五个维度各有日常值，被一句话推动，没人管就自己回落——记住的是此刻，不是发生过什么。',
       voice: '两件事分开看：听得见（把语音和视频里的话变成文字）、说得像（把文字变成她的声音）。合成在桥接进程里执行，这里只改参数和看状态。',
       bridge: '桥接是独立进程，人格卡由它读。这里只管看得见、点得动：状态、会话、SnowLuma、日志、启停。',
+      qzone: '她自己决定要不要发：说说是她自己的话，不是转述聊天。发之前会先看一眼今天发过没有，一天最多两条。',
       bili: '游客态只读：热门、搜索、视频详情、弹幕、每周必看、抽帧、刷过的视频、分享到 QQ。不登录、不点赞、不评论。',
       purpose: '不是关键词触发器：从最近的 QQ 聊天、记忆库里值得提的旧事、人格卡里她是谁，攒出「目标假设」，带归属、置信度和风险，再决定是分享、索取、邀请还是倾诉。',
       fish: '同一批同类 bot 被拉进同一个群时，别一起刷屏。这里调判定阈值、冷却和豁免名单。',
@@ -1199,6 +1201,416 @@ window.__ModuleLoader__.load({
 
     // B 站面板和其它页签一样是原生组件：颜色直接吃 DSH 的 CSS 变量，换主题自动跟随。
     // 数据仍然向 8788 那个本地服务取（它开了 CORS），不经过 iframe。
+    // 「QQ 空间」页签：桥接内置的空间接口（state / publish / profile / avatar / settings）。
+    // 面板只负责展示与调用；发布上限、敏感词拦截都在桥接侧把关。
+    function qzoneSexCode(value) {
+      const text = String(value ?? '').toLowerCase();
+      if (text === 'male' || text === '1') return '1';
+      if (text === 'female' || text === '2') return '2';
+      return '0';
+    }
+
+    function qzoneWhen(seconds) {
+      const n = Number(seconds);
+      if (!Number.isFinite(n) || n <= 0) return '';
+      const d = new Date(n * 1000);
+      const pad = (x) => String(x).padStart(2, '0');
+      return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    function QzoneBody() {
+      const [data, setData] = useState(null);
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState('');
+      const [ok, setOk] = useState('');
+      const [content, setContent] = useState('');
+      const [visibility, setVisibility] = useState('friends');
+      const [imageUrls, setImageUrls] = useState('');
+      const [nickname, setNickname] = useState('');
+      const [signature, setSignature] = useState('');
+      const [sex, setSex] = useState('0');
+      const [avatarUrl, setAvatarUrl] = useState('');
+      const [settings, setSettings] = useState(null);
+
+      const load = async (announce) => {
+        try {
+          const res = await api('/bridge/qzone');
+          const d = res?.data ?? null;
+          setData(d);
+          if (d?.user) {
+            setNickname((prev) => (prev === '' ? String(d.user.nickname ?? '') : prev));
+            setSignature((prev) => (prev === '' ? String(d.user.signature ?? '') : prev));
+            setSex((prev) => (prev === '0' ? qzoneSexCode(d.user.sex) : prev));
+          }
+          if (d?.settings) setSettings((prev) => prev ?? d.settings);
+          setError('');
+          if (announce) setOk(announce);
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        }
+      };
+
+      useEffect(() => {
+        load();
+      }, []);
+
+      const post = async (body, label) => {
+        setBusy(true);
+        setError('');
+        setOk('');
+        try {
+          const res = await api('/bridge/qzone', { method: 'POST', body: JSON.stringify(body) });
+          if (res?.ok === false) throw new Error(res.error || `${label}失败`);
+          await load();
+          setOk(`${label}完成。`);
+          return res?.data ?? null;
+        } catch (e) {
+          setError(String(e?.message ?? e));
+          throw e;
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const doPublish = async (dryRun) => {
+        const text = content.trim();
+        if (!text) {
+          setError('先写点内容再发。');
+          return;
+        }
+        const images = imageUrls
+          .split(/\n+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const out = await post(
+          { tool: 'publish', content: text, visibility, images, dryRun },
+          dryRun ? '预览' : '发布',
+        );
+        if (!dryRun && out?.ok && out?.verified) setContent('');
+      };
+
+      const saveProfile = async () => {
+        const body = { tool: 'profile', sex: Number(sex) };
+        if (nickname.trim()) body.nickname = nickname.trim();
+        if (signature.trim()) body.signature = signature.trim();
+        await post(body, '保存资料');
+      };
+
+      const saveAvatar = async () => {
+        const image = avatarUrl.trim();
+        if (!image) {
+          setError('先填一个 http(s) 图片链接。');
+          return;
+        }
+        await post({ tool: 'avatar', image }, '换头像');
+      };
+
+      const patchSetting = (key, value) =>
+        setSettings((prev) => ({ ...(prev || {}), [key]: value }));
+
+      const saveSettings = async () => {
+        if (!settings) return;
+        const out = await post({ tool: 'settings', settings }, '保存设置');
+        if (out?.settings) setSettings(out.settings);
+      };
+
+      if (!data) {
+        return h(
+          'div',
+          { className: 'shl-body' },
+          error
+            ? h('div', { className: 'shl-error' }, error)
+            : h('div', { className: 'shl-note' }, '正在读取 QQ 空间…'),
+        );
+      }
+
+      const user = data.user || {};
+      const moments = Array.isArray(data.moments) ? data.moments : [];
+      const todayCount = Number(data.todayCount || 0);
+      const dailyLimit = Number(settings?.dailyLimit ?? data.settings?.dailyLimit ?? 2);
+      const gateway = data.gateway || {};
+      const logs = Array.isArray(data.log) ? data.log : [];
+
+      return h(
+        'div',
+        { className: 'shl-body' },
+        h(
+          'div',
+          { className: 'shl-stats' },
+          h(Stat, { value: String(user.nickname || '—'), label: `QQ ${user.id || '—'}`, tone: 'on' }),
+          h(Stat, {
+            value: `${todayCount} / ${dailyLimit || '∞'}`,
+            label: '今天已发',
+            tone: dailyLimit > 0 && todayCount >= dailyLimit ? 'warn' : 'on',
+          }),
+          h(Stat, { value: String(data.total ?? 0), label: '空间总数', tone: 'on' }),
+          h(Stat, {
+            value: settings?.dryRun ? '演练中' : '正常',
+            label: '发布模式',
+            tone: settings?.dryRun ? 'warn' : 'on',
+          }),
+        ),
+
+        h(
+          'div',
+          { className: 'shl-toolbar' },
+          h('button', { type: 'button', className: 'shl-btn', onClick: () => load(), disabled: busy }, '刷新'),
+          ok ? h('span', { className: 'shl-ok' }, ok) : null,
+          error ? h('span', { className: 'shl-error' }, error) : null,
+        ),
+
+        h(
+          PanelGroup,
+          {
+            title: '发一条说说',
+            note: '上限、间隔、敏感词都在桥接侧拦；同样的内容不会重复发。图片只收公开 http(s) 链接。',
+          },
+          h(
+            'div',
+            { className: 'shl-field' },
+            h('div', { className: 'shl-label' }, '正文'),
+            h('textarea', {
+              className: 'shl-input shl-textarea',
+              rows: 4,
+              value: content,
+              placeholder: '想说什么…（1~3 句就好）',
+              maxLength: Number(settings?.maxChars ?? 600),
+              onChange: (e) => setContent(e.target.value),
+            }),
+            h('div', { className: 'shl-hint' }, `${[...content].length} / ${settings?.maxChars ?? 600} 字`),
+          ),
+          h(
+            Field,
+            { label: '谁能看见' },
+            h(
+              'select',
+              {
+                className: 'shl-input',
+                value: visibility,
+                onChange: (e) => setVisibility(e.target.value),
+              },
+              h('option', { value: 'friends' }, '好友可见'),
+              h('option', { value: 'public' }, '所有人可见'),
+              h('option', { value: 'self' }, '仅自己可见'),
+            ),
+          ),
+          h(
+            Field,
+            { label: '图片（可空）', hint: '一行一个 http(s) 链接，最多 9 张。' },
+            h('textarea', {
+              className: 'shl-input shl-textarea',
+              rows: 3,
+              value: imageUrls,
+              placeholder: 'https://…',
+              onChange: (e) => setImageUrls(e.target.value),
+            }),
+          ),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h('button', { type: 'button', className: 'shl-btn', onClick: () => doPublish(true), disabled: busy }, '预览（不发）'),
+            h('button', { type: 'button', className: 'shl-btn shl-btn-primary', onClick: () => doPublish(false), disabled: busy }, busy ? '处理中…' : '发布'),
+          ),
+        ),
+
+        h(
+          PanelGroup,
+          {
+            title: '资料',
+            note: '昵称留空 = 不改；签名留空 = 不改。',
+          },
+          h(
+            Field,
+            { label: '昵称', hint: '最多 16 字。' },
+            h('input', {
+              className: 'shl-input',
+              value: nickname,
+              onChange: (e) => setNickname(e.target.value),
+            }),
+          ),
+          h(
+            Field,
+            { label: '签名', hint: '最多 80 字。' },
+            h('input', {
+              className: 'shl-input',
+              value: signature,
+              onChange: (e) => setSignature(e.target.value),
+            }),
+          ),
+          h(
+            Field,
+            { label: '性别' },
+            h(
+              'select',
+              { className: 'shl-input', value: sex, onChange: (e) => setSex(e.target.value) },
+              h('option', { value: '0' }, '不公开'),
+              h('option', { value: '1' }, '男'),
+              h('option', { value: '2' }, '女'),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h('button', { type: 'button', className: 'shl-btn shl-btn-primary', onClick: saveProfile, disabled: busy }, '保存资料'),
+          ),
+        ),
+
+        h(
+          PanelGroup,
+          { title: '头像', note: '只收公开 http(s) 图片链接。' },
+          h(
+            Field,
+            { label: '图片地址' },
+            h('input', {
+              className: 'shl-input',
+              value: avatarUrl,
+              placeholder: 'https://…',
+              onChange: (e) => setAvatarUrl(e.target.value),
+            }),
+          ),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h('button', { type: 'button', className: 'shl-btn shl-btn-primary', onClick: saveAvatar, disabled: busy }, '换头像'),
+          ),
+        ),
+
+        h(
+          PanelGroup,
+          {
+            title: '设置',
+            note: '这些设置存在桥接的 config.json（socialV2.qzone），保存后立刻生效。',
+          },
+          h(Toggle, {
+            label: '启用 QQ 空间功能',
+            checked: settings?.enabled !== false,
+            onChange: (v) => patchSetting('enabled', v),
+          }),
+          h(Toggle, {
+            label: '允许发说说',
+            checked: settings?.allowPublish !== false,
+            onChange: (v) => patchSetting('allowPublish', v),
+          }),
+          h(Toggle, {
+            label: '允许改资料（昵称 / 签名 / 性别）',
+            checked: settings?.allowProfile !== false,
+            onChange: (v) => patchSetting('allowProfile', v),
+          }),
+          h(Toggle, {
+            label: '允许换头像',
+            checked: settings?.allowAvatar !== false,
+            onChange: (v) => patchSetting('allowAvatar', v),
+          }),
+          h(Toggle, {
+            label: '演练模式（只预览，不真发）',
+            checked: settings?.dryRun === true,
+            onChange: (v) => patchSetting('dryRun', v),
+          }),
+          h(
+            Field,
+            { label: '默认可见范围' },
+            h(
+              'select',
+              {
+                className: 'shl-input',
+                value: settings?.defaultVisibility || 'friends',
+                onChange: (e) => patchSetting('defaultVisibility', e.target.value),
+              },
+              h('option', { value: 'friends' }, '好友可见'),
+              h('option', { value: 'public' }, '所有人可见'),
+              h('option', { value: 'self' }, '仅自己可见'),
+            ),
+          ),
+          h(
+            Field,
+            { label: '每条上限（字）', hint: '50~1000。' },
+            h(NumInput, {
+              value: Number(settings?.maxChars ?? 600),
+              min: 50,
+              max: 1000,
+              onChange: (v) => patchSetting('maxChars', v),
+            }),
+          ),
+          h(
+            Field,
+            { label: '每天最多几条', hint: '0 = 不限；按本地自然日（0 点重置）。' },
+            h(NumInput, {
+              value: Number(settings?.dailyLimit ?? 2),
+              min: 0,
+              max: 20,
+              onChange: (v) => patchSetting('dailyLimit', v),
+            }),
+          ),
+          h(
+            Field,
+            { label: '每分钟最多几条', hint: '防连发，0 = 不限。' },
+            h(NumInput, {
+              value: Number(settings?.minuteLimit ?? 2),
+              min: 0,
+              max: 10,
+              onChange: (v) => patchSetting('minuteLimit', v),
+            }),
+          ),
+          h(
+            Field,
+            { label: '两条之间至少隔几分钟', hint: '0 = 不限间隔（重复内容仍会被挡）。' },
+            h(NumInput, {
+              value: Number(settings?.cooldownMinutes ?? 0),
+              min: 0,
+              max: 1440,
+              onChange: (v) => patchSetting('cooldownMinutes', v),
+            }),
+          ),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h('button', { type: 'button', className: 'shl-btn shl-btn-primary', onClick: saveSettings, disabled: busy || !settings }, '保存设置'),
+          ),
+        ),
+
+        h(
+          PanelGroup,
+          { title: `最近说说（共 ${data.total ?? moments.length} 条）` },
+          moments.length
+            ? moments.slice(0, 8).map((m, i) =>
+                h(
+                  'div',
+                  { key: m.tid || i, className: 'shl-qzone-post' },
+                  h('div', null, String(m.content || '').slice(0, 200)),
+                  h(
+                    'div',
+                    { className: 'shl-hint' },
+                    `${qzoneWhen(m.time)}${m.tid ? ` · ${m.tid}` : ''}${m.images ? ` · ${m.images} 张图` : ''}`,
+                  ),
+                ),
+              )
+            : h('div', { className: 'shl-empty' }, '还没有说说。'),
+        ),
+
+        logs.length
+          ? h(
+              PanelGroup,
+              { title: '最近操作' },
+              logs.map((entry, i) =>
+                h(
+                  'div',
+                  { key: i, className: 'shl-hint' },
+                  `${new Date(Number(entry.at) || Date.now()).toLocaleString()} · ${entry.tool || '?'} · ${entry.ok ? '成功' : '失败'}${entry.message ? ` · ${entry.message}` : ''}${entry.tid ? ` · ${entry.tid}` : ''}`,
+                ),
+              ),
+            )
+          : null,
+
+        h(
+          'div',
+          { className: 'shl-section' },
+          h('h4', { className: 'shl-h4' }, '协议端'),
+          h('div', { className: 'shl-note' }, `WebSocket：${gateway.wsUrl || '—'}`),
+          h('div', { className: 'shl-note' }, `HTTP：${gateway.httpUrl || '未开启（发语音、拉收藏表情会失败）'}`),
+        ),
+      );
+    }
+
     const BILI_TIERS = [
       ['frameMicro', '极短', 't ≤ 30 秒'],
       ['frameShort', '短', '30 秒 < t ≤ 3 分'],
@@ -1214,6 +1626,51 @@ window.__ModuleLoader__.load({
       const [notice, setNotice] = useState('');
       const [busy, setBusy] = useState(false);
       const [frames, setFrames] = useState({});
+      // 视频转写（whisper）的配置在 voice.json 的 asr 段，不在 B 站面板的 config 里。
+      const [asr, setAsr] = useState(null);
+      const [asrSt, setAsrSt] = useState(null);
+      const [asrBusy, setAsrBusy] = useState(false);
+
+      const loadAsr = useCallback(async () => {
+        try {
+          const res = await fetch(`${API}/voice`, { headers: { accept: 'application/json' } });
+          const d = await res.json();
+          if (d?.ok) {
+            setAsr(d.config?.asr ?? {});
+            setAsrSt(d.status?.asr ?? null);
+          }
+        } catch {
+          // 转写配置读不到不影响 B 站其它面板
+        }
+      }, []);
+
+      useEffect(() => {
+        loadAsr();
+      }, [loadAsr]);
+
+      const patchAsr = (key, value) =>
+        setAsr((prev) => ({ ...(prev || {}), [key]: value }));
+
+      const saveAsr = async () => {
+        if (asrBusy || !asr) return;
+        setAsrBusy(true);
+        setError('');
+        try {
+          const res = await fetch(`${API}/voice`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ patch: { asr } }),
+          });
+          const d = await res.json();
+          if (!d?.ok) throw new Error(d?.error || '保存转写设置失败');
+          setAsrSt(d.status?.asr ?? null);
+          setNotice('转写设置已保存');
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        } finally {
+          setAsrBusy(false);
+        }
+      };
 
       const call = useCallback(async (path, body) => {
         const res = await fetch(
@@ -1269,15 +1726,9 @@ window.__ModuleLoader__.load({
       const history = Array.isArray(data.history) ? data.history : [];
       const logs = Array.isArray(data.logs) ? data.logs : [];
       const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
+      const qqSessions = workspaces.flatMap((ws) => ws.sessions || []);
       const enabledWs = new Set(cfg.enabledWorkspaces || []);
       const enabledSess = new Set(cfg.enabledSessions || []);
-
-      const toggleWorkspace = (id, on) => {
-        const next = new Set(enabledWs);
-        if (on) next.add(id);
-        else next.delete(id);
-        save({ enabledWorkspaces: [...next], enabledSessions: [...enabledSess] });
-      };
 
       const toggleSession = (item, on) => {
         const next = new Set(enabledSess);
@@ -1452,50 +1903,124 @@ window.__ModuleLoader__.load({
           ),
         ),
         h(
-          'div',
-          { className: 'shl-section' },
-          h('h4', { className: 'shl-h4' }, '工作区与会话'),
+          PanelGroup,
+          {
+            title: '视频声音转写',
+            note: 'B 站视频没有 CC 字幕时，下载音轨、用本地 faster-whisper 转成文字。不碰 QQ 语音——QQ 那边的语音走 SnowLuma 自带的识别。',
+          },
+          asrSt
+            ? h(
+                'div',
+                { className: asrSt.ready ? 'shl-note' : 'shl-error' },
+                (() => {
+                  const missing = [];
+                  if (asrSt.pythonOk === false) missing.push('Python');
+                  if (asrSt.scriptOk === false) missing.push('转写脚本');
+                  if (missing.length) {
+                    return `✗ 还不能用：找不到 ${missing.join('、')}。没有 CC 字幕的视频会转不了，其余功能不受影响。`;
+                  }
+                  return asrSt.ffmpegOk === false
+                    ? `✓ 已就绪：${asrSt.model || 'small'} 模型。没找到 ffmpeg，会跳过抽音轨、直接让 whisper 解码原文件（慢一点）。`
+                    : `✓ 已就绪：${asrSt.model || 'small'} 模型，没有字幕时会自动转写。`;
+                })(),
+              )
+            : h('div', { className: 'shl-note' }, '正在检查转写环境…'),
+          h(Toggle, {
+            label: '启用本地转写',
+            checked: (asr?.enabled !== false),
+            onChange: (v) => patchAsr('enabled', v),
+          }),
+          h(
+            Field,
+            { label: '模型', hint: 'small 比 base 准不少，慢一倍左右；中文视频用 small。' },
+            h('input', {
+              className: 'shl-input',
+              value: asr?.model || '',
+              onChange: (e) => patchAsr('model', e.target.value),
+            }),
+          ),
+          h(
+            Field,
+            { label: '语言' },
+            h('input', {
+              className: 'shl-input',
+              value: asr?.lang || '',
+              onChange: (e) => patchAsr('lang', e.target.value),
+            }),
+          ),
+          h(
+            Field,
+            {
+              label: 'Python 路径',
+              hint: asrSt?.pythonOk
+                ? '是 faster-whisper 的便携解释器（自带依赖，不用系统 Python）。'
+                : '当前找不到。留空 = 用 D:\\dsh-data\\whisper\\python\\python.exe。',
+            },
+            h('input', {
+              className: 'shl-input',
+              value: asrSt?.python || asr?.python || '',
+              placeholder: 'D:\\dsh-data\\whisper\\python\\python.exe',
+              onChange: (e) => patchAsr('python', e.target.value),
+            }),
+          ),
+          h(
+            Field,
+            {
+              label: '转写脚本',
+              hint: asrSt?.scriptOk
+                ? '真正跑 whisper 的那个 Python 脚本。'
+                : '当前找不到。留空 = 用 D:\\dsh-data\\whisper\\transcribe.py。',
+            },
+            h('input', {
+              className: 'shl-input',
+              value: asrSt?.script || asr?.script || '',
+              placeholder: 'D:\\dsh-data\\whisper\\transcribe.py',
+              onChange: (e) => patchAsr('script', e.target.value),
+            }),
+          ),
           h(
             'div',
             { className: 'shl-note' },
-            '勾选工作区会放开它下面所有会话；也可只勾单个会话。这里只控制 B 站游客工具。',
+            'ffmpeg 用来从视频里抽音轨，必须在 PATH 里（或设 BILI_FFMPEG 环境变量）。',
           ),
-          workspaces.length
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h(
+              'button',
+              { type: 'button', className: 'shl-btn shl-btn-primary', onClick: saveAsr, disabled: asrBusy || !asr },
+              asrBusy ? '保存中…' : '保存转写设置',
+            ),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'shl-section' },
+          h('h4', { className: 'shl-h4' }, 'QQ 会话'),
+          h(
+            'div',
+            { className: 'shl-note' },
+            '只列出 QQ 聊天工作区里的会话。勾上 = 明确允许；不勾也默认放行（桥接映射过的 QQ 会话会自动识别）。这里只控制 B 站游客工具。',
+          ),
+          qqSessions.length
             ? h(
                 'div',
                 { className: 'shl-bili-scroll' },
-                workspaces.map((ws) =>
+                qqSessions.map((s) =>
                   h(
-                    'div',
-                    { key: ws.id, className: 'shl-bili-ws' },
-                    h(
-                      'label',
-                      { className: 'shl-switch' },
-                      h('input', {
-                        type: 'checkbox',
-                        checked: enabledWs.has(ws.id),
-                        onChange: (e) => toggleWorkspace(ws.id, e.target.checked),
-                      }),
-                      h('b', null, ws.title || String(ws.id).slice(0, 8)),
-                      h('span', { className: 'shl-bili-path' }, ws.path || ''),
-                    ),
-                    (ws.sessions || []).map((s) =>
-                      h(
-                        'label',
-                        { key: s.id, className: 'shl-switch shl-bili-sess' },
-                        h('input', {
-                          type: 'checkbox',
-                          checked: enabledSess.has(s.id) || Boolean(s.key && enabledSess.has(s.key)),
-                          onChange: (e) => toggleSession(s, e.target.checked),
-                        }),
-                        s.label || String(s.id).slice(0, 8),
-                        h('code', null, String(s.id).slice(0, 12)),
-                      ),
-                    ),
+                    'label',
+                    { key: s.id, className: 'shl-switch' },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: enabledSess.has(s.id) || Boolean(s.key && enabledSess.has(s.key)),
+                      onChange: (e) => toggleSession(s, e.target.checked),
+                    }),
+                    s.label || String(s.id).slice(0, 8),
+                    h('code', null, String(s.id).slice(0, 12)),
                   ),
                 ),
               )
-            : h('div', { className: 'shl-empty' }, '没有读到 DSH 工作区数据。'),
+            : h('div', { className: 'shl-empty' }, '还没读到 QQ 会话。桥接启动后会自己同步。'),
         ),
         h(
           'div',
@@ -1659,7 +2184,9 @@ window.__ModuleLoader__.load({
             ? h(VoiceBody)
             : tab === 'bridge'
               ? h(BridgeBody)
-              : tab === 'bili'
+              : tab === 'qzone'
+                ? h(QzoneBody)
+                : tab === 'bili'
                 ? h(BiliBody)
                 : tab === 'purpose'
                   ? h(PurposeBody)
@@ -1857,6 +2384,8 @@ window.__ModuleLoader__.load({
     // ── 语音 ────────────────────────────────────────────────────────────────
     // 合成在桥接进程里跑，这里只改配置、看状态。情绪那栏的取值是实测结论：
     // 复刻音色 + emotion 标签会变形，sad 尤甚；慢速反而更像难过。
+    // 「语音」页签：合成引擎（Edge / 火山复刻 v1 / v3）。
+    // 转写（whisper）是 B 站视频用的，已经挪到「B 站」页，这里不再重复。
     function VoiceBody() {
       const [cfg, setCfg] = useState(null);
       const [st, setSt] = useState(null);
@@ -1898,7 +2427,7 @@ window.__ModuleLoader__.load({
         setOk('');
         try {
           const pick = (g) => ({ [g]: draft[g] });
-          const body = { patch: { ...pick('tts'), ...pick('asr'), ...pick('reserved') } };
+          const body = { patch: { ...pick('tts'), ...pick('reserved') } };
           body.patch.tts = {
             ...draft.tts,
             volc: { ...draft.tts.volc },
@@ -1937,8 +2466,9 @@ window.__ModuleLoader__.load({
       const edge = tts.edge || {};
       const volc = tts.volc || {};
       const policy = tts.policy || {};
-      const asr = draft.asr || {};
       const reserved = draft.reserved || {};
+      const enabled = tts.enabled !== false;
+      const engineLabel = tts.engine === 'volc' ? '火山复刻' : 'Edge';
 
       const engineChip = (key, label) =>
         h(
@@ -1952,16 +2482,34 @@ window.__ModuleLoader__.load({
           label,
         );
 
+      const emotionChip = (mode, label) =>
+        h(
+          'button',
+          {
+            key: mode,
+            type: 'button',
+            className: `shl-chip${(volc.emotion || 'auto') === mode ? ' shl-chip-on' : ''}`,
+            onClick: () => patch('tts', 'volc', { ...volc, emotion: mode }),
+          },
+          label,
+        );
+
       return h(
         'div',
         { className: 'shl-body' },
         h(
           'div',
           { className: 'shl-stats' },
-          h(Stat, { value: tts.engine === 'volc' ? '火山复刻' : tts.engine === 'edge' ? 'Edge' : '未启用', label: '合成引擎', tone: tts.engine === 'edge' || st?.volc?.ready ? 'on' : 'warn' }),
-          h(Stat, { value: st?.volc?.voiceId || '—', label: '复刻音色', tone: st?.volc?.ready ? 'on' : 'off' }),
-          h(Stat, { value: asr.enabled === false ? '关' : String(asr.model || ''), label: '转写模型', tone: asr.enabled === false ? 'off' : st?.asr?.pythonOk ? 'on' : 'warn' }),
-          h(Stat, { value: st?.asr?.scriptOk ? '就绪' : '缺脚本', label: '转写后端', tone: st?.asr?.scriptOk ? 'on' : 'off' }),
+          h(Stat, {
+            value: enabled ? engineLabel : '已关闭',
+            label: '当前引擎',
+            tone: enabled && (tts.engine === 'edge' || st?.volc?.ready) ? 'on' : 'warn',
+          }),
+          h(Stat, {
+            value: st?.volc?.voiceId || '—',
+            label: '复刻音色',
+            tone: st?.volc?.ready ? 'on' : 'off',
+          }),
         ),
 
         h(
@@ -1976,13 +2524,23 @@ window.__ModuleLoader__.load({
         h(
           PanelGroup,
           {
-            title: '用哪套声音',
-            note: '两套都保留：Edge 不需要密钥、随时能出声，适合兜底；火山用的是你复刻的那条声线，更像她本人，但配置都在桥接那边。',
+            title: '开关与引擎',
+            note: '火山复刻更富有情感；当火山复刻不生效时，默认用 Edge 出声。',
           },
-          h('div', { className: 'shl-chips' }, engineChip('edge', 'Edge（兜底）'), engineChip('volc', '火山复刻（更像她）')),
+          h(Toggle, {
+            label: '语音合成总开关',
+            checked: enabled,
+            onChange: (v) => patch('tts', 'enabled', v),
+          }),
+          h(
+            'div',
+            { className: 'shl-chips' },
+            engineChip('edge', 'Edge'),
+            engineChip('volc', '火山复刻'),
+          ),
           Field({
             label: 'Edge 音色',
-            hint: '键里换成别的 voice_id 也可以，例如 zh-CN-XiaoxiaoNeural。',
+            hint: 'Edge 不需要密钥，随时能出声。键里换成别的 voice_id 也可以，例如 zh-CN-XiaoxiaoNeural。',
             children: h('input', {
               className: 'shl-input',
               value: edge.voice || '',
@@ -1994,17 +2552,121 @@ window.__ModuleLoader__.load({
         h(
           PanelGroup,
           {
-            title: '火山声音复刻',
-            note: '两条路：v1（集群 volcano_icl）只能用 happy/sad/angry 三个标签；v3（资源 seed-icl-2.0）能带一句心情描述，模型自己判断怎么念。填了 API Key 或资源 ID 就走 v3。注意 v3 的复刻音色资源必须是 seed-icl-2.0，写成 volc.megatts.voiceclone 会报并发超限——那是「并发版」那条线，配额是 0。',
+            title: '火山账号（v1 / v3 共用）',
+            note: 'AppID 和音色 ID 两条链路都要；Access Token 在没有 API Key 时也给 v3 当凭据用。',
           },
-          Field({ label: 'AppID', children: h('input', { className: 'shl-input', value: volc.appId || '', onChange: (e) => patch('tts', 'volc', { ...volc, appId: e.target.value }) }) }),
-          Field({ label: 'Access Token', hint: 'v1 用这个。', children: h('input', { className: 'shl-input', type: 'password', value: volc.token || '', onChange: (e) => patch('tts', 'volc', { ...volc, token: e.target.value }) }) }),
-          Field({ label: 'API Key', hint: 'v3 用这个（控制台「API Key」页建的）。不填也能走 v3，会用 Access Token 鉴权。', children: h('input', { className: 'shl-input', type: 'password', value: volc.apiKey || '', onChange: (e) => patch('tts', 'volc', { ...volc, apiKey: e.target.value }) }) }),
-          Field({ label: '音色 ID', hint: '控制台音色库里 S_ 开头的那串。', children: h('input', { className: 'shl-input', value: volc.voiceId || '', onChange: (e) => patch('tts', 'volc', { ...volc, voiceId: e.target.value }) }) }),
-          Field({ label: '资源 ID', hint: 'v3 用。字符版声音复刻是 seed-icl-2.0；普通音色是 seed-tts-2.0。', children: h('input', { className: 'shl-input', value: volc.resourceId || '', onChange: (e) => patch('tts', 'volc', { ...volc, resourceId: e.target.value }) }) }),
-          Field({ label: '集群', hint: '只有退回 v1 时才用得上：复刻音色只认 volcano_icl。', children: h('input', { className: 'shl-input', value: volc.cluster || '', onChange: (e) => patch('tts', 'volc', { ...volc, cluster: e.target.value }) }) }),
           Field({
-            label: '语速（v3）',
+            label: 'AppID',
+            hint: '火山控制台里的应用 ID，v1 和 v3 都要放进请求头。',
+            children: h('input', {
+              className: 'shl-input',
+              value: volc.appId || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, appId: e.target.value }),
+            }),
+          }),
+          Field({
+            label: 'Access Token',
+            hint: 'v1 必需；v3 在没有 API Key 时用它当凭据。',
+            children: h('input', {
+              className: 'shl-input',
+              type: 'password',
+              value: volc.token || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, token: e.target.value }),
+            }),
+          }),
+          Field({
+            label: '音色 ID',
+            hint: '控制台音色库里 S_ 开头的那串；v1 和 v3 共用这一个。',
+            children: h('input', {
+              className: 'shl-input',
+              value: volc.voiceId || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, voiceId: e.target.value }),
+            }),
+          }),
+        ),
+
+        h(
+          PanelGroup,
+          {
+            title: '火山复刻 · v1',
+            note: 'v1（集群 volcano_icl）只能用 happy / sad / angry 三个语气标签。没填 API Key 和资源 ID 时走这条。',
+          },
+          Field({
+            label: '集群',
+            hint: '复刻音色只认 volcano_icl。',
+            children: h('input', {
+              className: 'shl-input',
+              value: volc.cluster || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, cluster: e.target.value }),
+            }),
+          }),
+          h('div', { className: 'shl-subh' }, '语气'),
+          h(
+            'div',
+            { className: 'shl-chips' },
+            emotionChip('auto', '自动（按情感加标签）'),
+            emotionChip('none', '不传标签（只调语速）'),
+          ),
+          h(
+            'div',
+            { className: 'shl-note' },
+            '自动：真高兴时加 happy、气到 30 以上才可能加标签；不传标签：任何情况都不加，只改语速。实测复刻音色叠 sad 标签会变形，所以「不该高兴」时只用慢，标签只在真高兴时轻点一下。',
+          ),
+          Field({
+            label: '开心时的强度',
+            hint: '1 最自然；4 已经像在表演，别往上加。只在「自动」模式下用。',
+            children: h(NumInput, {
+              value: Number(policy.happyScale ?? 1),
+              min: 0,
+              max: 5,
+              onChange: (v) => patch('tts', 'policy', { ...policy, happyScale: v }),
+            }),
+          }),
+          h(Toggle, {
+            label: '低落时改用慢速',
+            checked: policy.sadUseSlow !== false,
+            onChange: (v) => patch('tts', 'policy', { ...policy, sadUseSlow: v }),
+          }),
+          Field({
+            label: '低落的语速倍率',
+            hint: '0.92 是实测里最像「有点难过」的值。关掉上面那个开关时，这里不生效。',
+            children: h(NumInput, {
+              value: Number(policy.sadSpeed ?? 0.92),
+              min: 0.7,
+              max: 1.2,
+              step: 0.01,
+              onChange: (v) => patch('tts', 'policy', { ...policy, sadSpeed: v }),
+            }),
+          }),
+        ),
+
+        h(
+          PanelGroup,
+          {
+            title: '火山复刻 · v3',
+            note: 'v3（资源 seed-icl-2.0）能带一句心情描述，模型自己判断怎么念。填了 API Key 或资源 ID 就走 v3。注意复刻音色资源必须是 seed-icl-2.0，写成 volc.megatts.voiceclone 会报并发超限——那是「并发版」那条线，配额是 0。',
+          },
+          Field({
+            label: 'API Key',
+            hint: '控制台「API Key」页建的。不填也能走 v3，会用 Access Token 鉴权。',
+            children: h('input', {
+              className: 'shl-input',
+              type: 'password',
+              value: volc.apiKey || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, apiKey: e.target.value }),
+            }),
+          }),
+          Field({
+            label: '资源 ID',
+            hint: '字符版声音复刻是 seed-icl-2.0；普通音色是 seed-tts-2.0。',
+            children: h('input', {
+              className: 'shl-input',
+              value: volc.resourceId || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, resourceId: e.target.value }),
+            }),
+          }),
+          Field({
+            label: '语速',
             hint: '-50~100，负数更慢。实测 0 / -10 / -20 三档，-10 最自然；再往下只多 1 KB，收益递减。',
             children: h('input', {
               className: 'shl-input',
@@ -2016,48 +2678,31 @@ window.__ModuleLoader__.load({
               onChange: (e) => patch('tts', 'volc', { ...volc, speechRate: Number(e.target.value) }),
             }),
           }),
-
-          h('div', { className: 'shl-subh' }, '念法怎么定（v3）'),
-          h('div', { className: 'shl-note' }, 'instruction 只来自她自己写的 style：写了就用她的，没写就空着走裸合成，系统不代她挑语气。注意 QQ 合成仍会叠上面的语速档（默认 -10），和火山控制台的裸合成听起来不一样，属正常。context_texts 能把前几句对话一起送进去，让同一句话在有上下文时念得更准，这个还没接，先占个位置。'),
-          h(Toggle, { label: '上下文引用（context_texts，未接）', checked: reserved.contextTexts === true, onChange: (v) => patch('reserved', 'contextTexts', v) }),
-          h(Toggle, { label: '自然语言指令（instruction，已接通）', checked: reserved.instruction !== false, onChange: (v) => patch('reserved', 'instruction', v) }),
-
-          h('div', { className: 'shl-subh' }, '退回 v1 时的语气参数'),
-          h('div', { className: 'shl-note' }, '这一组只在「引擎选火山、但没填 API Key 和资源 ID」时生效，走 v3 全部不参与。实测复刻音色叠 sad 标签会变形、同样一句压低语速反而更像难过，所以「不该高兴」时只用慢，标签只在真高兴时轻点一下。'),
-          h('div', { className: 'shl-chips' },
-            ['auto', 'none'].map((mode) =>
-              h('button', {
-                key: mode,
-                type: 'button',
-                className: `shl-chip${(volc.emotion || 'auto') === mode ? ' shl-chip-on' : ''}`,
-                onClick: () => patch('tts', 'volc', { ...volc, emotion: mode }),
-              }, mode === 'auto' ? '自动（按情感加标签）' : '不传标签（只调语速）'),
-            ),
+          h('div', { className: 'shl-subh' }, '念法怎么定'),
+          h(
+            'div',
+            { className: 'shl-note' },
+            'instruction 只来自她自己写的 style：写了就用她的，没写就空着走裸合成，系统不代她挑语气。注意 QQ 合成仍会叠上面的语速档（默认 -10），和火山控制台的裸合成听起来不一样，属正常。',
           ),
-          h('div', { className: 'shl-note' }, '自动：真高兴时加 happy、气到 30 以上才可能加标签；不传标签：任何情况都不加，只改语速。'),
-          Field({ label: '开心时的强度', hint: '1 最自然；4 已经像在表演，别往上加。只在「自动」模式下用。', children: h(NumInput, { value: Number(policy.happyScale ?? 1), min: 0, max: 5, onChange: (v) => patch('tts', 'policy', { ...policy, happyScale: v }) }) }),
-          h(Toggle, { label: '低落时改用慢速', checked: policy.sadUseSlow !== false, onChange: (v) => patch('tts', 'policy', { ...policy, sadUseSlow: v }) }),
-          Field({ label: '低落的语速倍率', hint: '0.92 是实测里最像「有点难过」的值。关掉上面那个开关时，这里不生效。', children: h(NumInput, { value: Number(policy.sadSpeed ?? 0.92), min: 0.7, max: 1.2, step: 0.01, onChange: (v) => patch('tts', 'policy', { ...policy, sadSpeed: v }) }) }),
-        ),
-
-        h(
-          PanelGroup,
-          {
-            title: '听得见（语音转写）',
-            note: 'QQ 语音不用本地转写：SnowLuma 自带 fetch_ptt_text，直接拿 QQ 那边的识别结果。这里的 whisper 是给 B 站视频用的——没有 CC 字幕时才下载音轨转写。',
-          },
-          h(Toggle, { label: '启用本地转写', checked: asr.enabled !== false, onChange: (v) => patch('asr', null, { ...asr, enabled: v }) }),
-          Field({ label: '模型', hint: 'small 比 base 准不少，慢一倍左右；中文视频用 small。', children: h('input', { className: 'shl-input', value: asr.model || '', onChange: (e) => patch('asr', null, { ...asr, model: e.target.value }) }) }),
-          Field({ label: '语言', children: h('input', { className: 'shl-input', value: asr.lang || '', onChange: (e) => patch('asr', null, { ...asr, lang: e.target.value }) }) }),
-          Field({ label: 'Python 路径', hint: `现在${st?.asr?.pythonOk ? '找得到' : '找不到'}。`, children: h('input', { className: 'shl-input', value: asr.python || '', onChange: (e) => patch('asr', null, { ...asr, python: e.target.value }) }) }),
-          Field({ label: '转写脚本', hint: `现在${st?.asr?.scriptOk ? '找得到' : '找不到'}。`, children: h('input', { className: 'shl-input', value: asr.script || '', onChange: (e) => patch('asr', null, { ...asr, script: e.target.value }) }) }),
+          h(Toggle, {
+            label: '自然语言指令（instruction）',
+            checked: reserved.instruction !== false,
+            onChange: (v) => patch('reserved', 'instruction', v),
+          }),
+          h(Toggle, {
+            label: '上下文引用（context_texts，暂未接入）',
+            checked: reserved.contextTexts === true,
+            onChange: (v) => patch('reserved', 'contextTexts', v),
+          }),
         ),
 
         h(
           'div',
           { className: 'shl-section' },
           h('h4', { className: 'shl-h4' }, '为什么不是「让模型自己读情感」'),
-          h('div', { className: 'shl-how' },
+          h(
+            'div',
+            { className: 'shl-how' },
             h('p', null, '会读。实测同一句话只改措辞、不传任何情绪参数，三条音频的哈希全不一样——它确实会从文字里判断该怎么念。'),
             h('p', null, '但它只看得到这一段文字。同一句「没事，你忙吧」，在撒娇和真生气里是两种念法，而字面一模一样。这时候才需要一个标签（或者一句指令）把真实状态告诉它。'),
             h('p', null, '所以两层配合：文字负责大头，让她真的写带情绪的话；情感值只在文字和状态打架时补一刀。'),
@@ -2531,7 +3176,8 @@ window.__ModuleLoader__.load({
 
     function BridgeBody() {
       const [status, setStatus] = useState(null);
-      const [sessions, setSessions] = useState({});
+      const [sessions, setSessions] = useState([]);
+      const [sessionsCwd, setSessionsCwd] = useState('');
       const [logs, setLogs] = useState(null);
       const [logName, setLogName] = useState('bridge');
       const [busy, setBusy] = useState(false);
@@ -2539,6 +3185,12 @@ window.__ModuleLoader__.load({
       const [ok, setOk] = useState('');
       const [snowluma, setSnowluma] = useState(null);
       const [consoleInfo, setConsoleInfo] = useState(null);
+      const [gateway, setGateway] = useState(null);
+      // null 表示「还没从服务端读到过」；用户手动清空后是 ''，轮询不会再把它填回去。
+      const [gwHome, setGwHome] = useState(null);
+      const [gwKind, setGwKind] = useState('');
+      const [upd, setUpd] = useState(null);
+      const [updBusy, setUpdBusy] = useState(false);
 
       const loadStatus = async (announce) => {
         const fails = [];
@@ -2550,16 +3202,25 @@ window.__ModuleLoader__.load({
             return { ok: false, data: null };
           }
         };
-        const [st, ss, sl, cs] = await Promise.all([
+        const [st, ss, sl, cs, gw] = await Promise.all([
           get('/bridge/status'),
           get('/bridge/sessions'),
           get('/bridge/snowluma'),
           get('/bridge/console'),
+          get('/bridge/gateway'),
         ]);
         if (st.ok) setStatus(st.data?.bridge ?? null);
-        if (ss.ok) setSessions(ss.data?.sessions ?? {});
+        if (ss.ok) {
+          setSessions(Array.isArray(ss.data?.sessions) ? ss.data.sessions : []);
+          setSessionsCwd(ss.data?.cwd ?? '');
+        }
         if (sl.ok) setSnowluma(sl.data?.snowluma ?? null);
         if (cs.ok) setConsoleInfo(cs.data ?? null);
+        if (gw.ok && gw.data?.ok) {
+          setGateway(gw.data);
+          setGwHome((prev) => (prev == null ? (gw.data.home || '') : prev));
+          setGwKind((prev) => prev || gw.data.kind || 'auto');
+        }
         setError(fails.length ? `有 ${fails.length} 个接口没取到：${fails.join('；')}` : '');
         if (announce) setOk(announce);
       };
@@ -2575,6 +3236,18 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         loadStatus();
+      }, []);
+
+      useEffect(() => {
+        // 版本检查单独跑一次：面板每 10 秒轮询状态，不必每次都问 GitHub（服务端还有 30 分钟缓存）。
+        // 接口外层 ok 恒为 true，检查失败信息在 checkOk / checkError 里，这样「当前版本」始终能显示。
+        (async () => {
+          try {
+            setUpd(await api('/bridge/update'));
+          } catch (e) {
+            setUpd((prev) => ({ ...(prev ?? {}), ok: false, checkOk: false, checkError: String(e?.message ?? e) }));
+          }
+        })();
       }, []);
 
       useEffect(() => {
@@ -2615,6 +3288,91 @@ window.__ModuleLoader__.load({
           setError(String(e?.message ?? e));
         } finally {
           setBusy(false);
+        }
+      };
+
+      const saveGateway = async () => {
+        setBusy(true);
+        setError('');
+        setOk('');
+        try {
+          const data = await api('/bridge/gateway', {
+            method: 'POST',
+            body: JSON.stringify({ kind: gwKind, openqqHome: gwHome ?? '' }),
+          });
+          if (data.ok === false) throw new Error(data.error || '保存网关设置失败');
+          setOk('网关设置已保存，重启桥接后生效。');
+          await loadStatus();
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const installOpenQQ = async () => {
+        setBusy(true);
+        setError('');
+        setOk('正在下载 OpenQQ（约 1.4MB）…');
+        try {
+          const data = await api('/bridge/gateway/install-openqq', {
+            method: 'POST',
+            body: JSON.stringify({ home: gwHome ?? '' }),
+          });
+          if (data.ok === false) throw new Error(data.error || '安装 OpenQQ 失败');
+          setOk(data.already ? '这个目录里已经有 OpenQQ 了。' : `OpenQQ ${data.tag || ''} 已装到 ${data.home}`);
+          await loadStatus();
+        } catch (e) {
+          setOk('');
+          setError(String(e?.message ?? e));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const startOpenQQ = async () => {
+        setBusy(true);
+        setError('');
+        setOk('');
+        try {
+          const data = await api('/bridge/gateway/start-openqq', { method: 'POST', body: '{}' });
+          if (data.ok === false) throw new Error(data.error || '启动 OpenQQ 失败');
+          setOk(data.already ? 'OpenQQ 的 WebUI 已经在跑了。' : 'OpenQQ 已启动，去 WebUI 扫码登录 QQ。');
+          if (data.webuiUrl) openInTab(data.webuiUrl);
+          await loadStatus();
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const checkUpd = async () => {
+        setUpdBusy(true);
+        setError('');
+        try {
+          setUpd(await api('/bridge/update?force=1'));
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        } finally {
+          setUpdBusy(false);
+        }
+      };
+
+      const applyUpd = async () => {
+        setUpdBusy(true);
+        setError('');
+        setOk('');
+        try {
+          const data = await api('/bridge/update', { method: 'POST', body: '{}' });
+          if (data.ok === false) throw new Error(data.error || '更新失败');
+          const cleaned = Array.isArray(data.pruned) && data.pruned.length ? `，清理 ${data.pruned.length} 个过期文件` : '';
+          setOk(`已更新到 ${data.version}（写入 ${data.written.length} 个文件${cleaned}）。重启 DSH 后生效。`);
+          setUpd(await api('/bridge/update?force=1'));
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        } finally {
+          setUpdBusy(false);
         }
       };
 
@@ -2660,6 +3418,39 @@ window.__ModuleLoader__.load({
         consoleInfo?.port
           ? h('div', { className: 'shl-note shl-pick' }, `控制台：${consoleDisplay}（「打开控制台」会自动带上口令，地址里不显示）`)
           : null,
+        h(
+          'div',
+          { className: 'shl-section' },
+          h('h4', { className: 'shl-h4' }, '插件版本'),
+          h(
+            'div',
+            { className: 'shl-kv' },
+            h('span', null, '当前版本'),
+            h('b', null, upd?.current ?? '—'),
+            h('span', null, '最新版本'),
+            h('b', null, upd?.checkOk === false ? '检查失败' : (upd?.latest ?? '—')),
+            h('span', null, '来源'),
+            h('b', null, upd?.kind === 'release' ? 'GitHub Release' : upd?.kind === 'commit' ? 'main 提交' : '—'),
+          ),
+          upd?.behind
+            ? h(
+                'div',
+                { className: 'shl-note shl-pick' },
+                `有新版本 ${upd.latest} 可以更新。只覆盖插件代码，presets、bridge/config.json、bridge/state 和你自己的数据都会保留；更新完要重启 DSH。`,
+              )
+            : null,
+          !upd?.behind && upd?.ok && upd?.ahead
+            ? h('div', { className: 'shl-note' }, `本地版本 ${upd.current} 比仓库里的 ${upd.latest} 新（还没发布），不提示更新。`)
+            : null,
+          upd?.checkOk === false ? h('div', { className: 'shl-err' }, `检查更新失败：${upd.checkError || upd.error || '未知错误'}`) : null,
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h('button', { className: 'shl-btn shl-btn2', disabled: updBusy, onClick: checkUpd }, updBusy ? '…' : '检查更新'),
+            upd?.behind ? h('button', { className: 'shl-btn', disabled: updBusy, onClick: applyUpd }, updBusy ? '更新中…' : `更新到 ${upd.latest}`) : null,
+            upd?.url ? h('a', { className: 'shl-link', href: upd.url, target: '_blank', rel: 'noopener' }, '在 GitHub 查看') : null,
+          ),
+        ),
         error ? h('div', { className: 'shl-err' }, error) : null,
         ok ? h('div', { className: 'shl-ok' }, ok) : null,
         status && !running && status.hint ? h('div', { className: 'shl-note' }, status.hint) : null,
@@ -2691,31 +3482,46 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'shl-section' },
-          h('h4', { className: 'shl-h4' }, 'SnowLuma 网关'),
+          h('h4', { className: 'shl-h4' }, '网关'),
           h(
             'div',
             { className: 'shl-kv' },
-            h('span', null, '状态'),
+            h('span', null, '当前生效'),
+            h('b', null, gateway?.active === 'openqq' ? 'OpenQQ' : gateway?.active === 'snowluma' ? 'SnowLuma' : '未连接'),
+            h('span', null, '选择'),
+            h('b', null, gateway?.kind === 'openqq' ? '只用 OpenQQ' : gateway?.kind === 'snowluma' ? '只用 SnowLuma' : '自动'),
+          ),
+          h('div', { className: 'shl-note' }, '两个网关都是 OneBot v11。自动时先看 SnowLuma 端口，没有再看 OpenQQ；换完要重启桥接才生效。'),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h(
+              'select',
+              { className: 'shl-btn shl-btn2', value: gwKind || 'auto', onChange: (e) => setGwKind(e.target.value) },
+              h('option', { value: 'auto' }, '自动（SnowLuma 优先）'),
+              h('option', { value: 'snowluma' }, '只用 SnowLuma'),
+              h('option', { value: 'openqq' }, '只用 OpenQQ'),
+            ),
+            h('input', {
+              className: 'shl-btn shl-btn2',
+              value: gwHome ?? '',
+              placeholder: 'OpenQQ 目录（默认 ~/OpenQQ）',
+              onChange: (e) => setGwHome(e.target.value),
+            }),
+            h('button', { className: 'shl-btn shl-btn2', disabled: busy, onClick: saveGateway }, '保存'),
+          ),
+          h(
+            'div',
+            { className: 'shl-kv' },
+            h('span', null, 'SnowLuma'),
             h('b', null, snowluma ? (snowRunning ? '在线' : '离线') : '—'),
             h('span', null, '端口'),
             h('b', null, snowluma?.port || '—'),
-            h('span', null, '启动器'),
-            h('b', null, snowluma?.launcherPath || '—'),
             snowluma?.webuiUrl ? h('span', null, 'WebUI') : null,
             snowluma?.webuiUrl
-              ? h(
-                  'b',
-                  null,
-                  h(
-                    'a',
-                    { href: snowluma.webuiUrl, target: '_blank', rel: 'noopener' },
-                    snowluma.webuiUrl,
-                  ),
-                )
+              ? h('b', null, h('a', { href: snowluma.webuiUrl, target: '_blank', rel: 'noopener' }, snowluma.webuiUrl))
               : null,
           ),
-          snowluma && !snowRunning && snowluma.hint ? h('div', { className: 'shl-note' }, snowluma.hint) : null,
-          h('div', { className: 'shl-note' }, '首次使用先在 WebUI 里扫码登录 QQ；登录成功，桥接才连得上。'),
           h(
             'div',
             { className: 'shl-toolbar' },
@@ -2724,6 +3530,27 @@ window.__ModuleLoader__.load({
               ? h('button', { className: 'shl-btn shl-btn2', onClick: () => openInTab(snowluma.webuiUrl) }, '打开 WebUI')
               : null,
           ),
+          h(
+            'div',
+            { className: 'shl-kv' },
+            h('span', null, 'OpenQQ'),
+            h('b', null, gateway?.openqq ? (gateway.openqq.installed ? '已安装' : '未安装') : '—'),
+            h('span', null, '目录'),
+            h('b', null, gateway?.openqq?.home || gwHome || '—'),
+            h('span', null, '状态'),
+            h('b', null, gateway?.openqq ? (gateway.openqq.running ? '在线' : '离线') : '—'),
+          ),
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h('button', { className: 'shl-btn', disabled: busy, onClick: installOpenQQ }, gateway?.openqq?.installed ? '重新检查安装' : '安装 OpenQQ'),
+            h('button', { className: 'shl-btn shl-btn2', disabled: busy || !gateway?.openqq?.installed, onClick: startOpenQQ }, '启动 OpenQQ'),
+            gateway?.openqq?.webuiUrl
+              ? h('button', { className: 'shl-btn shl-btn2', onClick: () => openInTab(gateway.openqq.webuiUrl) }, '打开 WebUI')
+              : null,
+          ),
+          h('div', { className: 'shl-note' }, 'OpenQQ 装好后先在它的 WebUI 里扫码登录 QQ，再在网络配置里打开 OneBot v11 的 WebSocket（默认 3001）；桥接会读它的 config/openqq.json 拿端口和 token。'),
+          gateway?.hint ? h('div', { className: 'shl-note' }, gateway.hint) : null,
         ),
         h(
           'div',
@@ -2742,15 +3569,30 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'shl-section' },
-          h('h4', { className: 'shl-h4' }, 'DSH 会话映射'),
-          Object.keys(sessions).length === 0
+          h('h4', { className: 'shl-h4' }, '会话映射'),
+          h(
+            'div',
+            { className: 'shl-note' },
+            sessionsCwd
+              ? `工作区：${sessionsCwd}（只有这个工作区里的 QQ 会话会列出来；记忆与情感也只往这里注入）`
+              : '读不到桥接的工作区设置，下面是本地记录，可能含旧会话。',
+          ),
+          sessions.length === 0
             ? h('div', { className: 'shl-empty' }, '还没有会话。收到第一条消息时会建。')
             : h(
                 'div',
                 { className: 'shl-kv' },
-                ...Object.entries(sessions).flatMap(([key, id]) => [
-                  h('span', { key: `${key}-k` }, key),
-                  h('b', { key: `${key}-v` }, String(id)),
+                ...sessions.flatMap((row) => [
+                  h(
+                    'span',
+                    { key: `${row.key}-k` },
+                    `${row.kind === 'group' ? '群' : row.kind === 'private' ? '私聊' : '会话'} ${row.id || row.key}${row.name ? `（${row.name}）` : ''}`,
+                  ),
+                  h(
+                    'b',
+                    { key: `${row.key}-v` },
+                    `${String(row.sessionId).slice(0, 8)}… ${row.dormant ? '休眠' : row.active ? '在用' : '未确认'}`,
+                  ),
                 ]),
               ),
         ),

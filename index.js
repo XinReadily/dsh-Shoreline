@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 import { MemoryService, defaultDataDir, humanSpan } from './lib/memory/service.js';
 import { registerApi } from './lib/memory/api.js';
-import { BridgeService } from './lib/bridge/service.js';
+import { BridgeService, resolveBridgeRoot } from './lib/bridge/service.js';
 import { registerBridgeApi } from './lib/bridge/api.js';
 import { MoodService } from './lib/mood/service.js';
 import { registerMoodApi } from './lib/mood/api.js';
@@ -46,11 +46,6 @@ const fmtWhen = (value) => {
   return `${d.getMonth() + 1}月${d.getDate()}日`;
 };
 
-/** 桥接默认目录：用户主目录下的 qq-bridge-own（可用 options.bridgeRoot 覆盖）。 */
-function defaultBridgeRoot() {
-  return path.join(os.homedir(), 'qq-bridge-own');
-}
-
 export function apply(ctx, options = {}) {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const service = new MemoryService({
@@ -63,6 +58,12 @@ export function apply(ctx, options = {}) {
   const searchLimit = Number.isFinite(options.searchLimit) ? options.searchLimit : 5;
   const log = (...args) => ctx.logger?.warn?.(...args);
 
+  // 桥接根目录：显式配置 > 已装好的 ~/qq-bridge-own > 插件内置 bridge/（自动生成配置、复用依赖）。
+  const bridgeRoot = resolveBridgeRoot({
+    bridgeRoot: options.bridgeRoot,
+    embedded: options.embeddedBridge === true,
+  });
+
   const bootstrap = service.init().catch((error) => {
     log(`[shoreline] 记忆库加载失败：${error?.message ?? error}`);
   });
@@ -71,7 +72,7 @@ export function apply(ctx, options = {}) {
   // 「主人」从桥接配置里读：不指定对象推亲密时落到他身上，而不是另开一个「默认」桶。
   const mood = new MoodService({
     dir: options.moodDir,
-    ownerTarget: options.ownerTarget || readOwnerTarget(options.bridgeRoot ?? defaultBridgeRoot()),
+    ownerTarget: options.ownerTarget || readOwnerTarget(bridgeRoot),
   });
   const moodReady = mood.init().catch((error) => {
     log(`[shoreline] 情感状态加载失败：${error?.message ?? error}`);
@@ -92,7 +93,9 @@ export function apply(ctx, options = {}) {
   // 记忆与情感。DSH 组装提示词时会把当前 agent 放进组装上下文（context.agent，
   // 同时也放在 context.scope 里，见 dsh-agent 的 assembleContextFor），这里
   // 据此只对桥接用的工作区输出内容；其他工作区拿到空串，等于没有这两块。
-  const targetWorkspace = String(options.workspace ?? 'C:\\Users\\34693\\.dsh\\qq-chat-work')
+  // 默认就是桥接建会话用的工作区（桥接 ensureConfig 里的 sessionCwd 也是这个），
+  // 用 os.homedir() 拼，别人装插件时不会指向作者机器上的路径。
+  const targetWorkspace = String(options.workspace ?? path.join(os.homedir(), '.dsh', 'qq-chat-work'))
     .replace(/[\\/]+$/, '')
     .toLowerCase();
   const sameWorkspace = (cwd) => String(cwd ?? '').replace(/[\\/]+$/, '').toLowerCase() === targetWorkspace;
@@ -166,7 +169,7 @@ export function apply(ctx, options = {}) {
   // 桥接本体是独立进程：qq-bridge-own\src\bridge.js（enhanced 底座 + 目的引擎 + 鱼群保护）。
   // 这里只做「看得见、点得动」——不碰它的内部状态。
   const bridge = new BridgeService({
-    root: options.bridgeRoot ?? defaultBridgeRoot(),
+    root: bridgeRoot,
     nodeExe: options.nodeExe ?? '',
     dshWebUrl: options.dshWebUrl || webOrigin(ctx),
     log,

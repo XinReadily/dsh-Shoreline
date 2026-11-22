@@ -1,3 +1,5 @@
+    // 「语音」页签：合成引擎（Edge / 火山复刻 v1 / v3）。
+    // 转写（whisper）是 B 站视频用的，已经挪到「B 站」页，这里不再重复。
     function VoiceBody() {
       const [cfg, setCfg] = useState(null);
       const [st, setSt] = useState(null);
@@ -39,7 +41,7 @@
         setOk('');
         try {
           const pick = (g) => ({ [g]: draft[g] });
-          const body = { patch: { ...pick('tts'), ...pick('asr'), ...pick('reserved') } };
+          const body = { patch: { ...pick('tts'), ...pick('reserved') } };
           body.patch.tts = {
             ...draft.tts,
             volc: { ...draft.tts.volc },
@@ -78,8 +80,9 @@
       const edge = tts.edge || {};
       const volc = tts.volc || {};
       const policy = tts.policy || {};
-      const asr = draft.asr || {};
       const reserved = draft.reserved || {};
+      const enabled = tts.enabled !== false;
+      const engineLabel = tts.engine === 'volc' ? '火山复刻' : 'Edge';
 
       const engineChip = (key, label) =>
         h(
@@ -93,16 +96,34 @@
           label,
         );
 
+      const emotionChip = (mode, label) =>
+        h(
+          'button',
+          {
+            key: mode,
+            type: 'button',
+            className: `shl-chip${(volc.emotion || 'auto') === mode ? ' shl-chip-on' : ''}`,
+            onClick: () => patch('tts', 'volc', { ...volc, emotion: mode }),
+          },
+          label,
+        );
+
       return h(
         'div',
         { className: 'shl-body' },
         h(
           'div',
           { className: 'shl-stats' },
-          h(Stat, { value: tts.engine === 'volc' ? '火山复刻' : tts.engine === 'edge' ? 'Edge' : '未启用', label: '合成引擎', tone: tts.engine === 'edge' || st?.volc?.ready ? 'on' : 'warn' }),
-          h(Stat, { value: st?.volc?.voiceId || '—', label: '复刻音色', tone: st?.volc?.ready ? 'on' : 'off' }),
-          h(Stat, { value: asr.enabled === false ? '关' : String(asr.model || ''), label: '转写模型', tone: asr.enabled === false ? 'off' : st?.asr?.pythonOk ? 'on' : 'warn' }),
-          h(Stat, { value: st?.asr?.scriptOk ? '就绪' : '缺脚本', label: '转写后端', tone: st?.asr?.scriptOk ? 'on' : 'off' }),
+          h(Stat, {
+            value: enabled ? engineLabel : '已关闭',
+            label: '当前引擎',
+            tone: enabled && (tts.engine === 'edge' || st?.volc?.ready) ? 'on' : 'warn',
+          }),
+          h(Stat, {
+            value: st?.volc?.voiceId || '—',
+            label: '复刻音色',
+            tone: st?.volc?.ready ? 'on' : 'off',
+          }),
         ),
 
         h(
@@ -117,13 +138,23 @@
         h(
           PanelGroup,
           {
-            title: '用哪套声音',
-            note: '两套都保留：Edge 不需要密钥、随时能出声，适合兜底；火山用的是你复刻的那条声线，更像她本人，但配置都在桥接那边。',
+            title: '开关与引擎',
+            note: '火山复刻更富有情感；当火山复刻不生效时，默认用 Edge 出声。',
           },
-          h('div', { className: 'shl-chips' }, engineChip('edge', 'Edge（兜底）'), engineChip('volc', '火山复刻（更像她）')),
+          h(Toggle, {
+            label: '语音合成总开关',
+            checked: enabled,
+            onChange: (v) => patch('tts', 'enabled', v),
+          }),
+          h(
+            'div',
+            { className: 'shl-chips' },
+            engineChip('edge', 'Edge'),
+            engineChip('volc', '火山复刻'),
+          ),
           Field({
             label: 'Edge 音色',
-            hint: '键里换成别的 voice_id 也可以，例如 zh-CN-XiaoxiaoNeural。',
+            hint: 'Edge 不需要密钥，随时能出声。键里换成别的 voice_id 也可以，例如 zh-CN-XiaoxiaoNeural。',
             children: h('input', {
               className: 'shl-input',
               value: edge.voice || '',
@@ -135,17 +166,121 @@
         h(
           PanelGroup,
           {
-            title: '火山声音复刻',
-            note: '两条路：v1（集群 volcano_icl）只能用 happy/sad/angry 三个标签；v3（资源 seed-icl-2.0）能带一句心情描述，模型自己判断怎么念。填了 API Key 或资源 ID 就走 v3。注意 v3 的复刻音色资源必须是 seed-icl-2.0，写成 volc.megatts.voiceclone 会报并发超限——那是「并发版」那条线，配额是 0。',
+            title: '火山账号（v1 / v3 共用）',
+            note: 'AppID 和音色 ID 两条链路都要；Access Token 在没有 API Key 时也给 v3 当凭据用。',
           },
-          Field({ label: 'AppID', children: h('input', { className: 'shl-input', value: volc.appId || '', onChange: (e) => patch('tts', 'volc', { ...volc, appId: e.target.value }) }) }),
-          Field({ label: 'Access Token', hint: 'v1 用这个。', children: h('input', { className: 'shl-input', type: 'password', value: volc.token || '', onChange: (e) => patch('tts', 'volc', { ...volc, token: e.target.value }) }) }),
-          Field({ label: 'API Key', hint: 'v3 用这个（控制台「API Key」页建的）。不填也能走 v3，会用 Access Token 鉴权。', children: h('input', { className: 'shl-input', type: 'password', value: volc.apiKey || '', onChange: (e) => patch('tts', 'volc', { ...volc, apiKey: e.target.value }) }) }),
-          Field({ label: '音色 ID', hint: '控制台音色库里 S_ 开头的那串。', children: h('input', { className: 'shl-input', value: volc.voiceId || '', onChange: (e) => patch('tts', 'volc', { ...volc, voiceId: e.target.value }) }) }),
-          Field({ label: '资源 ID', hint: 'v3 用。字符版声音复刻是 seed-icl-2.0；普通音色是 seed-tts-2.0。', children: h('input', { className: 'shl-input', value: volc.resourceId || '', onChange: (e) => patch('tts', 'volc', { ...volc, resourceId: e.target.value }) }) }),
-          Field({ label: '集群', hint: '只有退回 v1 时才用得上：复刻音色只认 volcano_icl。', children: h('input', { className: 'shl-input', value: volc.cluster || '', onChange: (e) => patch('tts', 'volc', { ...volc, cluster: e.target.value }) }) }),
           Field({
-            label: '语速（v3）',
+            label: 'AppID',
+            hint: '火山控制台里的应用 ID，v1 和 v3 都要放进请求头。',
+            children: h('input', {
+              className: 'shl-input',
+              value: volc.appId || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, appId: e.target.value }),
+            }),
+          }),
+          Field({
+            label: 'Access Token',
+            hint: 'v1 必需；v3 在没有 API Key 时用它当凭据。',
+            children: h('input', {
+              className: 'shl-input',
+              type: 'password',
+              value: volc.token || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, token: e.target.value }),
+            }),
+          }),
+          Field({
+            label: '音色 ID',
+            hint: '控制台音色库里 S_ 开头的那串；v1 和 v3 共用这一个。',
+            children: h('input', {
+              className: 'shl-input',
+              value: volc.voiceId || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, voiceId: e.target.value }),
+            }),
+          }),
+        ),
+
+        h(
+          PanelGroup,
+          {
+            title: '火山复刻 · v1',
+            note: 'v1（集群 volcano_icl）只能用 happy / sad / angry 三个语气标签。没填 API Key 和资源 ID 时走这条。',
+          },
+          Field({
+            label: '集群',
+            hint: '复刻音色只认 volcano_icl。',
+            children: h('input', {
+              className: 'shl-input',
+              value: volc.cluster || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, cluster: e.target.value }),
+            }),
+          }),
+          h('div', { className: 'shl-subh' }, '语气'),
+          h(
+            'div',
+            { className: 'shl-chips' },
+            emotionChip('auto', '自动（按情感加标签）'),
+            emotionChip('none', '不传标签（只调语速）'),
+          ),
+          h(
+            'div',
+            { className: 'shl-note' },
+            '自动：真高兴时加 happy、气到 30 以上才可能加标签；不传标签：任何情况都不加，只改语速。实测复刻音色叠 sad 标签会变形，所以「不该高兴」时只用慢，标签只在真高兴时轻点一下。',
+          ),
+          Field({
+            label: '开心时的强度',
+            hint: '1 最自然；4 已经像在表演，别往上加。只在「自动」模式下用。',
+            children: h(NumInput, {
+              value: Number(policy.happyScale ?? 1),
+              min: 0,
+              max: 5,
+              onChange: (v) => patch('tts', 'policy', { ...policy, happyScale: v }),
+            }),
+          }),
+          h(Toggle, {
+            label: '低落时改用慢速',
+            checked: policy.sadUseSlow !== false,
+            onChange: (v) => patch('tts', 'policy', { ...policy, sadUseSlow: v }),
+          }),
+          Field({
+            label: '低落的语速倍率',
+            hint: '0.92 是实测里最像「有点难过」的值。关掉上面那个开关时，这里不生效。',
+            children: h(NumInput, {
+              value: Number(policy.sadSpeed ?? 0.92),
+              min: 0.7,
+              max: 1.2,
+              step: 0.01,
+              onChange: (v) => patch('tts', 'policy', { ...policy, sadSpeed: v }),
+            }),
+          }),
+        ),
+
+        h(
+          PanelGroup,
+          {
+            title: '火山复刻 · v3',
+            note: 'v3（资源 seed-icl-2.0）能带一句心情描述，模型自己判断怎么念。填了 API Key 或资源 ID 就走 v3。注意复刻音色资源必须是 seed-icl-2.0，写成 volc.megatts.voiceclone 会报并发超限——那是「并发版」那条线，配额是 0。',
+          },
+          Field({
+            label: 'API Key',
+            hint: '控制台「API Key」页建的。不填也能走 v3，会用 Access Token 鉴权。',
+            children: h('input', {
+              className: 'shl-input',
+              type: 'password',
+              value: volc.apiKey || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, apiKey: e.target.value }),
+            }),
+          }),
+          Field({
+            label: '资源 ID',
+            hint: '字符版声音复刻是 seed-icl-2.0；普通音色是 seed-tts-2.0。',
+            children: h('input', {
+              className: 'shl-input',
+              value: volc.resourceId || '',
+              onChange: (e) => patch('tts', 'volc', { ...volc, resourceId: e.target.value }),
+            }),
+          }),
+          Field({
+            label: '语速',
             hint: '-50~100，负数更慢。实测 0 / -10 / -20 三档，-10 最自然；再往下只多 1 KB，收益递减。',
             children: h('input', {
               className: 'shl-input',
@@ -157,48 +292,31 @@
               onChange: (e) => patch('tts', 'volc', { ...volc, speechRate: Number(e.target.value) }),
             }),
           }),
-
-          h('div', { className: 'shl-subh' }, '念法怎么定（v3）'),
-          h('div', { className: 'shl-note' }, 'instruction 只来自她自己写的 style：写了就用她的，没写就空着走裸合成，系统不代她挑语气。注意 QQ 合成仍会叠上面的语速档（默认 -10），和火山控制台的裸合成听起来不一样，属正常。context_texts 能把前几句对话一起送进去，让同一句话在有上下文时念得更准，这个还没接，先占个位置。'),
-          h(Toggle, { label: '上下文引用（context_texts，未接）', checked: reserved.contextTexts === true, onChange: (v) => patch('reserved', 'contextTexts', v) }),
-          h(Toggle, { label: '自然语言指令（instruction，已接通）', checked: reserved.instruction !== false, onChange: (v) => patch('reserved', 'instruction', v) }),
-
-          h('div', { className: 'shl-subh' }, '退回 v1 时的语气参数'),
-          h('div', { className: 'shl-note' }, '这一组只在「引擎选火山、但没填 API Key 和资源 ID」时生效，走 v3 全部不参与。实测复刻音色叠 sad 标签会变形、同样一句压低语速反而更像难过，所以「不该高兴」时只用慢，标签只在真高兴时轻点一下。'),
-          h('div', { className: 'shl-chips' },
-            ['auto', 'none'].map((mode) =>
-              h('button', {
-                key: mode,
-                type: 'button',
-                className: `shl-chip${(volc.emotion || 'auto') === mode ? ' shl-chip-on' : ''}`,
-                onClick: () => patch('tts', 'volc', { ...volc, emotion: mode }),
-              }, mode === 'auto' ? '自动（按情感加标签）' : '不传标签（只调语速）'),
-            ),
+          h('div', { className: 'shl-subh' }, '念法怎么定'),
+          h(
+            'div',
+            { className: 'shl-note' },
+            'instruction 只来自她自己写的 style：写了就用她的，没写就空着走裸合成，系统不代她挑语气。注意 QQ 合成仍会叠上面的语速档（默认 -10），和火山控制台的裸合成听起来不一样，属正常。',
           ),
-          h('div', { className: 'shl-note' }, '自动：真高兴时加 happy、气到 30 以上才可能加标签；不传标签：任何情况都不加，只改语速。'),
-          Field({ label: '开心时的强度', hint: '1 最自然；4 已经像在表演，别往上加。只在「自动」模式下用。', children: h(NumInput, { value: Number(policy.happyScale ?? 1), min: 0, max: 5, onChange: (v) => patch('tts', 'policy', { ...policy, happyScale: v }) }) }),
-          h(Toggle, { label: '低落时改用慢速', checked: policy.sadUseSlow !== false, onChange: (v) => patch('tts', 'policy', { ...policy, sadUseSlow: v }) }),
-          Field({ label: '低落的语速倍率', hint: '0.92 是实测里最像「有点难过」的值。关掉上面那个开关时，这里不生效。', children: h(NumInput, { value: Number(policy.sadSpeed ?? 0.92), min: 0.7, max: 1.2, step: 0.01, onChange: (v) => patch('tts', 'policy', { ...policy, sadSpeed: v }) }) }),
-        ),
-
-        h(
-          PanelGroup,
-          {
-            title: '听得见（语音转写）',
-            note: 'QQ 语音不用本地转写：SnowLuma 自带 fetch_ptt_text，直接拿 QQ 那边的识别结果。这里的 whisper 是给 B 站视频用的——没有 CC 字幕时才下载音轨转写。',
-          },
-          h(Toggle, { label: '启用本地转写', checked: asr.enabled !== false, onChange: (v) => patch('asr', null, { ...asr, enabled: v }) }),
-          Field({ label: '模型', hint: 'small 比 base 准不少，慢一倍左右；中文视频用 small。', children: h('input', { className: 'shl-input', value: asr.model || '', onChange: (e) => patch('asr', null, { ...asr, model: e.target.value }) }) }),
-          Field({ label: '语言', children: h('input', { className: 'shl-input', value: asr.lang || '', onChange: (e) => patch('asr', null, { ...asr, lang: e.target.value }) }) }),
-          Field({ label: 'Python 路径', hint: `现在${st?.asr?.pythonOk ? '找得到' : '找不到'}。`, children: h('input', { className: 'shl-input', value: asr.python || '', onChange: (e) => patch('asr', null, { ...asr, python: e.target.value }) }) }),
-          Field({ label: '转写脚本', hint: `现在${st?.asr?.scriptOk ? '找得到' : '找不到'}。`, children: h('input', { className: 'shl-input', value: asr.script || '', onChange: (e) => patch('asr', null, { ...asr, script: e.target.value }) }) }),
+          h(Toggle, {
+            label: '自然语言指令（instruction）',
+            checked: reserved.instruction !== false,
+            onChange: (v) => patch('reserved', 'instruction', v),
+          }),
+          h(Toggle, {
+            label: '上下文引用（context_texts，暂未接入）',
+            checked: reserved.contextTexts === true,
+            onChange: (v) => patch('reserved', 'contextTexts', v),
+          }),
         ),
 
         h(
           'div',
           { className: 'shl-section' },
           h('h4', { className: 'shl-h4' }, '为什么不是「让模型自己读情感」'),
-          h('div', { className: 'shl-how' },
+          h(
+            'div',
+            { className: 'shl-how' },
             h('p', null, '会读。实测同一句话只改措辞、不传任何情绪参数，三条音频的哈希全不一样——它确实会从文字里判断该怎么念。'),
             h('p', null, '但它只看得到这一段文字。同一句「没事，你忙吧」，在撒娇和真生气里是两种念法，而字面一模一样。这时候才需要一个标签（或者一句指令）把真实状态告诉它。'),
             h('p', null, '所以两层配合：文字负责大头，让她真的写带情绪的话；情感值只在文字和状态打架时补一刀。'),

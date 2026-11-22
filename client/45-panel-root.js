@@ -33,7 +33,9 @@
             ? h(VoiceBody)
             : tab === 'bridge'
               ? h(BridgeBody)
-              : tab === 'bili'
+              : tab === 'qzone'
+                ? h(QzoneBody)
+                : tab === 'bili'
                 ? h(BiliBody)
                 : tab === 'purpose'
                   ? h(PurposeBody)

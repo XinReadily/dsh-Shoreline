@@ -13,6 +13,51 @@
       const [notice, setNotice] = useState('');
       const [busy, setBusy] = useState(false);
       const [frames, setFrames] = useState({});
+      // 视频转写（whisper）的配置在 voice.json 的 asr 段，不在 B 站面板的 config 里。
+      const [asr, setAsr] = useState(null);
+      const [asrSt, setAsrSt] = useState(null);
+      const [asrBusy, setAsrBusy] = useState(false);
+
+      const loadAsr = useCallback(async () => {
+        try {
+          const res = await fetch(`${API}/voice`, { headers: { accept: 'application/json' } });
+          const d = await res.json();
+          if (d?.ok) {
+            setAsr(d.config?.asr ?? {});
+            setAsrSt(d.status?.asr ?? null);
+          }
+        } catch {
+          // 转写配置读不到不影响 B 站其它面板
+        }
+      }, []);
+
+      useEffect(() => {
+        loadAsr();
+      }, [loadAsr]);
+
+      const patchAsr = (key, value) =>
+        setAsr((prev) => ({ ...(prev || {}), [key]: value }));
+
+      const saveAsr = async () => {
+        if (asrBusy || !asr) return;
+        setAsrBusy(true);
+        setError('');
+        try {
+          const res = await fetch(`${API}/voice`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ patch: { asr } }),
+          });
+          const d = await res.json();
+          if (!d?.ok) throw new Error(d?.error || '保存转写设置失败');
+          setAsrSt(d.status?.asr ?? null);
+          setNotice('转写设置已保存');
+        } catch (e) {
+          setError(String(e?.message ?? e));
+        } finally {
+          setAsrBusy(false);
+        }
+      };
 
       const call = useCallback(async (path, body) => {
         const res = await fetch(
@@ -68,15 +113,9 @@
       const history = Array.isArray(data.history) ? data.history : [];
       const logs = Array.isArray(data.logs) ? data.logs : [];
       const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
+      const qqSessions = workspaces.flatMap((ws) => ws.sessions || []);
       const enabledWs = new Set(cfg.enabledWorkspaces || []);
       const enabledSess = new Set(cfg.enabledSessions || []);
-
-      const toggleWorkspace = (id, on) => {
-        const next = new Set(enabledWs);
-        if (on) next.add(id);
-        else next.delete(id);
-        save({ enabledWorkspaces: [...next], enabledSessions: [...enabledSess] });
-      };
 
       const toggleSession = (item, on) => {
         const next = new Set(enabledSess);
@@ -251,50 +290,124 @@
           ),
         ),
         h(
-          'div',
-          { className: 'shl-section' },
-          h('h4', { className: 'shl-h4' }, '工作区与会话'),
+          PanelGroup,
+          {
+            title: '视频声音转写',
+            note: 'B 站视频没有 CC 字幕时，下载音轨、用本地 faster-whisper 转成文字。不碰 QQ 语音——QQ 那边的语音走 SnowLuma 自带的识别。',
+          },
+          asrSt
+            ? h(
+                'div',
+                { className: asrSt.ready ? 'shl-note' : 'shl-error' },
+                (() => {
+                  const missing = [];
+                  if (asrSt.pythonOk === false) missing.push('Python');
+                  if (asrSt.scriptOk === false) missing.push('转写脚本');
+                  if (missing.length) {
+                    return `✗ 还不能用：找不到 ${missing.join('、')}。没有 CC 字幕的视频会转不了，其余功能不受影响。`;
+                  }
+                  return asrSt.ffmpegOk === false
+                    ? `✓ 已就绪：${asrSt.model || 'small'} 模型。没找到 ffmpeg，会跳过抽音轨、直接让 whisper 解码原文件（慢一点）。`
+                    : `✓ 已就绪：${asrSt.model || 'small'} 模型，没有字幕时会自动转写。`;
+                })(),
+              )
+            : h('div', { className: 'shl-note' }, '正在检查转写环境…'),
+          h(Toggle, {
+            label: '启用本地转写',
+            checked: (asr?.enabled !== false),
+            onChange: (v) => patchAsr('enabled', v),
+          }),
+          h(
+            Field,
+            { label: '模型', hint: 'small 比 base 准不少，慢一倍左右；中文视频用 small。' },
+            h('input', {
+              className: 'shl-input',
+              value: asr?.model || '',
+              onChange: (e) => patchAsr('model', e.target.value),
+            }),
+          ),
+          h(
+            Field,
+            { label: '语言' },
+            h('input', {
+              className: 'shl-input',
+              value: asr?.lang || '',
+              onChange: (e) => patchAsr('lang', e.target.value),
+            }),
+          ),
+          h(
+            Field,
+            {
+              label: 'Python 路径',
+              hint: asrSt?.pythonOk
+                ? '是 faster-whisper 的便携解释器（自带依赖，不用系统 Python）。'
+                : '当前找不到。留空 = 用 D:\\dsh-data\\whisper\\python\\python.exe。',
+            },
+            h('input', {
+              className: 'shl-input',
+              value: asrSt?.python || asr?.python || '',
+              placeholder: 'D:\\dsh-data\\whisper\\python\\python.exe',
+              onChange: (e) => patchAsr('python', e.target.value),
+            }),
+          ),
+          h(
+            Field,
+            {
+              label: '转写脚本',
+              hint: asrSt?.scriptOk
+                ? '真正跑 whisper 的那个 Python 脚本。'
+                : '当前找不到。留空 = 用 D:\\dsh-data\\whisper\\transcribe.py。',
+            },
+            h('input', {
+              className: 'shl-input',
+              value: asrSt?.script || asr?.script || '',
+              placeholder: 'D:\\dsh-data\\whisper\\transcribe.py',
+              onChange: (e) => patchAsr('script', e.target.value),
+            }),
+          ),
           h(
             'div',
             { className: 'shl-note' },
-            '勾选工作区会放开它下面所有会话；也可只勾单个会话。这里只控制 B 站游客工具。',
+            'ffmpeg 用来从视频里抽音轨，必须在 PATH 里（或设 BILI_FFMPEG 环境变量）。',
           ),
-          workspaces.length
+          h(
+            'div',
+            { className: 'shl-toolbar' },
+            h(
+              'button',
+              { type: 'button', className: 'shl-btn shl-btn-primary', onClick: saveAsr, disabled: asrBusy || !asr },
+              asrBusy ? '保存中…' : '保存转写设置',
+            ),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'shl-section' },
+          h('h4', { className: 'shl-h4' }, 'QQ 会话'),
+          h(
+            'div',
+            { className: 'shl-note' },
+            '只列出 QQ 聊天工作区里的会话。勾上 = 明确允许；不勾也默认放行（桥接映射过的 QQ 会话会自动识别）。这里只控制 B 站游客工具。',
+          ),
+          qqSessions.length
             ? h(
                 'div',
                 { className: 'shl-bili-scroll' },
-                workspaces.map((ws) =>
+                qqSessions.map((s) =>
                   h(
-                    'div',
-                    { key: ws.id, className: 'shl-bili-ws' },
-                    h(
-                      'label',
-                      { className: 'shl-switch' },
-                      h('input', {
-                        type: 'checkbox',
-                        checked: enabledWs.has(ws.id),
-                        onChange: (e) => toggleWorkspace(ws.id, e.target.checked),
-                      }),
-                      h('b', null, ws.title || String(ws.id).slice(0, 8)),
-                      h('span', { className: 'shl-bili-path' }, ws.path || ''),
-                    ),
-                    (ws.sessions || []).map((s) =>
-                      h(
-                        'label',
-                        { key: s.id, className: 'shl-switch shl-bili-sess' },
-                        h('input', {
-                          type: 'checkbox',
-                          checked: enabledSess.has(s.id) || Boolean(s.key && enabledSess.has(s.key)),
-                          onChange: (e) => toggleSession(s, e.target.checked),
-                        }),
-                        s.label || String(s.id).slice(0, 8),
-                        h('code', null, String(s.id).slice(0, 12)),
-                      ),
-                    ),
+                    'label',
+                    { key: s.id, className: 'shl-switch' },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: enabledSess.has(s.id) || Boolean(s.key && enabledSess.has(s.key)),
+                      onChange: (e) => toggleSession(s, e.target.checked),
+                    }),
+                    s.label || String(s.id).slice(0, 8),
+                    h('code', null, String(s.id).slice(0, 12)),
                   ),
                 ),
               )
-            : h('div', { className: 'shl-empty' }, '没有读到 DSH 工作区数据。'),
+            : h('div', { className: 'shl-empty' }, '还没读到 QQ 会话。桥接启动后会自己同步。'),
         ),
         h(
           'div',
