@@ -212,7 +212,7 @@ export function apply(ctx, options = {}) {
   }
   if (options.autoStartBiliPanel !== false) {
     const panelPort = Number(process.env.BILI_FEED_PANEL_PORT || 8788);
-    const dataDir = process.env.BILI_FEED_DATA || path.join('D:', 'dsh-data', 'bili-feed');
+    const dataDir = process.env.BILI_FEED_DATA || path.join(os.homedir(), '.dsh', 'bili-feed');
     const ensurePanel = async () => {
       try {
         const res = await fetch(`http://127.0.0.1:${panelPort}/api/state`, {

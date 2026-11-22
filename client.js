@@ -1750,8 +1750,9 @@ window.__ModuleLoader__.load({
       const cfg = data.config || {};
       const history = Array.isArray(data.history) ? data.history : [];
       const logs = Array.isArray(data.logs) ? data.logs : [];
-      const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
-      const qqSessions = workspaces.flatMap((ws) => ws.sessions || []);
+      const qqSessions = Array.isArray(data.sessions)
+        ? [...data.sessions].sort((a, b) => String(a.key).localeCompare(String(b.key)))
+        : [];
       const enabledWs = new Set(cfg.enabledWorkspaces || []);
       const enabledSess = new Set(cfg.enabledSessions || []);
 
@@ -1899,11 +1900,11 @@ window.__ModuleLoader__.load({
             Field,
             {
               label: '保存位置',
-              hint: '留空就用 D:\\dsh-data\\bili-feed\\media；填绝对路径可指到别的盘',
+              hint: '留空就用 ~/.dsh/bili-feed/media；填绝对路径可指到别的盘',
             },
             h('input', {
               value: cfg.mediaDir || '',
-              placeholder: 'D:\\dsh-data\\bili-feed\\media',
+              placeholder: 'C:\\Users\\<user>\\.dsh\\bili-feed\\media',
               onBlur: (e) => save({ mediaDir: e.target.value.trim() }),
             }),
           ),
@@ -2015,7 +2016,7 @@ window.__ModuleLoader__.load({
             h('input', {
               className: 'shl-input',
               value: asrSt?.script || asr?.script || '',
-              placeholder: 'D:\\dsh-data\\whisper\\transcribe.py',
+              placeholder: 'C:\\Users\\<user>\\.dsh\\shoreline\\whisper\\transcribe.py',
               onChange: (e) => patchAsr('script', e.target.value),
             }),
           ),
@@ -2037,31 +2038,38 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'shl-section' },
-          h('h4', { className: 'shl-h4' }, 'QQ 会话'),
+          h('h4', { className: 'shl-h4' }, 'QQ 聊天会话（自动识别）'),
           h(
             'div',
             { className: 'shl-note' },
-            '只列出 QQ 聊天工作区里的会话。勾上 = 明确允许；不勾也默认放行（桥接映射过的 QQ 会话会自动识别）。这里只控制 B 站游客工具。',
+            '这些是桥接上报的 QQ 会话（私聊/群）。勾上 = 明确允许；不勾也默认放行。这里只控制 B 站游客工具。',
           ),
           qqSessions.length
             ? h(
                 'div',
                 { className: 'shl-bili-scroll' },
-                qqSessions.map((s) =>
-                  h(
+                qqSessions.map((s) => {
+                  const key = String(s.key || '');
+                  const label = key.startsWith('group:')
+                    ? `群 ${key.slice(6)}`
+                    : key.startsWith('private:')
+                      ? `私聊 ${key.slice(8)}`
+                      : key || String(s.sessionId || '').slice(0, 12);
+                  const keys = [s.key, s.sessionId].filter(Boolean);
+                  return h(
                     'label',
-                    { key: s.id, className: 'shl-switch' },
+                    { key: s.key || s.sessionId, className: 'shl-switch' },
                     h('input', {
                       type: 'checkbox',
-                      checked: enabledSess.has(s.id) || Boolean(s.key && enabledSess.has(s.key)),
+                      checked: keys.some((k) => enabledSess.has(k)),
                       onChange: (e) => toggleSession(s, e.target.checked),
                     }),
-                    s.label || String(s.id).slice(0, 8),
-                    h('code', null, String(s.id).slice(0, 12)),
-                  ),
-                ),
+                    label,
+                    s.sessionId ? h('code', null, String(s.sessionId).slice(0, 12)) : null,
+                  );
+                }),
               )
-            : h('div', { className: 'shl-empty' }, '还没读到 QQ 会话。桥接启动后会自己同步。'),
+            : h('div', { className: 'shl-empty' }, '桥接还没上报会话。先去「桥接/角色」页确认桥接已连接，这里会自动出现。'),
         ),
         h(
           'div',

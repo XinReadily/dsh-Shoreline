@@ -42,7 +42,7 @@ Shoreline 是 DSH 的常驻能力层插件，用来替代 SurfCore：
 | 语音配置 | `C:\Users<user>\.dsh\shoreline\voice.json` |
 | QQ 桥接 | 默认仍用已装好的 `C:\Users<user>\qq-bridge-own`；没有时用插件内置 `bridge\`（见下节「内置桥接」） |
 | 内置桥接 | `C:\Users<user>\.dsh\plugins\shoreline\bridge\`（`scripts\vendor-bridge.mjs` 从桥接源码同步）；运行时生成 `bridge\config.json` 与 `bridge\state\`（已 gitignore） |
-| 媒体与模型 | `D:\dsh-data\bili-feed`（抽帧）、`D:\dsh-data\whisper`（Python + faster-whisper + 模型） |
+| 媒体与模型 | `~/.dsh/bili-feed/media`（抽帧）、`~/.dsh/shoreline/whisper`（一键装的 Python + 模型；老机器可能还在 `D:\dsh-data\whisper`） |
 | 临时脚本 | `C:\Users<user>\.dsh\im\_*.mjs`（探针/迁移脚本，不属插件） |
 | QQ 空间 | **桥接内置**（P4）：`POST /api/socialV2/qzone`，body `{ key, tool: 'state'|'publish'|'profile'|'avatar'|'settings', ... }`；工具 `qzone_state` / `qzone_publish` / `qzone_profile` / `qzone_avatar` 由 `mcp-snowluma-safe.js` 注册，已加入 `qq-tool-restrict.mjs` 的 SAFE_EXACT。走协议端 OneBot 接口（`get_qzone_msg_list` / `send_qzone_msg` / `set_qq_profile` / `set_qq_avatar`），不依赖外部插件、不用浏览器；限频与开关存在 `config.json` 的 `socialV2.qzone`（每天按自然日算，默认 2 条、每分钟 2 条、600 字），支持 `dryRun` 演练；面板「QQ 空间」页签有总览 / 发布 / 资料 / 头像 / 设置 / 最近说说 / 最近操作；旧 `dsh-qzone-post` 已从 profile 注销 |
 
@@ -184,7 +184,7 @@ Shoreline 是 DSH 的常驻能力层插件，用来替代 SurfCore：
 - `voice.json` 不能带 BOM（PowerShell `Set-Content -Encoding UTF8` 会带），否则 JSON.parse 失败静默回落 Edge
 - Windows Python 默认 GBK，`transcribe.py` 里必须强制 stdout 为 UTF-8
 - **Edge 必须本机有 Python + edge-tts**：桥接跑 `python tts.py`。面板「语音 → Edge 环境」可以**一键安装**（`lib/python-env.js`）：从华为云下 Windows 嵌入式 Python 3.11.9，再从清华/阿里 PyPI 镜像下 edge-tts 与依赖 wheel（含 aiohttp 的 cp311-win_amd64 轮子），解压到 `~/.dsh/shoreline/python`，补 `_pth` 的 `Lib\site-packages`，最后放 `tts.py` 并写回 `voice.json`。实测 15 个包 / 26 MB / 13 秒，合成 29 KB mp3 正常。
-- 桥接选 Python 的顺序：`tts.edge.python` → `SHORELINE_PYTHON` → 插件装的那份（存在才用）→ 老机器默认 `D:\dsh-data\whisper\python\python.exe`；`tts.py` 同理。
+- 桥接选 Python 的顺序：`tts.edge.python` → `SHORELINE_PYTHON` → 插件装的那份（存在才用）→ 老机器可能残留的 `D:\dsh-data\whisper`；`tts.py` 同理。
 - 试过用纯 Node 直连 Edge TTS（`bridge/src/edge-tts.js` 保留着）：新版微软换成 `Sec-MS-GEC` v2 token（`"<16 hex>-<64 hex>"`，CS64 自定义哈希 + 改过的 SHA256，算法在 `edge_tts/drm.py` 里），手写复刻不现实且随微软改版失效，所以默认还是走 Python。
 
 ---

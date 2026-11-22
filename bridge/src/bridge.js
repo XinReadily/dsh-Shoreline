@@ -7211,7 +7211,7 @@ async function main() {
             return legacy;
           };
           const pyExe = pickPath(edgeCfg.python || process.env.SHORELINE_PYTHON, bundledPy, '');
-          const pyScript = pickPath(edgeCfg.script || process.env.SHORELINE_TTS_SCRIPT, bundledScript, 'D:\\dsh-data\\whisper\\tts.py');
+          const pyScript = pickPath(edgeCfg.script || process.env.SHORELINE_TTS_SCRIPT, bundledScript, '');
           try {
             fs.mkdirSync(ttsDir, { recursive: true });
             const fileName = `tts-${Date.now()}.mp3`;

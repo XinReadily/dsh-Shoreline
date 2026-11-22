@@ -11,7 +11,7 @@ os.environ.setdefault("OMP_NUM_THREADS", str(max(1, (os.cpu_count() or 4) // 2))
 from faster_whisper import WhisperModel
 
 audio = sys.argv[1]
-model_dir = os.environ.get("WHISPER_MODEL_DIR", r"D:/dsh-data/whisper/models")
+model_dir = os.environ.get("WHISPER_MODEL_DIR", os.path.join(os.path.expanduser("~"), ".dsh", "shoreline", "whisper", "models"))
 # 优先 small（中文准得多），没有就退 base；也可以 WHISPER_SIZE=base 临时换回去。
 size = os.environ.get("WHISPER_SIZE", "small")
 model_size = os.environ.get("WHISPER_MODEL", "")
