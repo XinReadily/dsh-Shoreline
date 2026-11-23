@@ -13,3 +13,6 @@ bridge/config.json
 bridge/state/
 .update-cache.json
 .update-backup-*
+
+# 本地开发交接文档，不随仓库分发
+HANDOVER.md
